@@ -328,7 +328,9 @@ OggOpusEncoder.prototype.segmentPacket = function( packetLength ) {
 
     var segmentLength = Math.min( packetLength, 255 );
     this.segmentTable[ this.segmentTableIndex++ ] = segmentLength;
-    this.segmentData.set( this.encoderOutputBuffer.subarray( packetIndex, packetIndex + segmentLength ), this.segmentDataIndex );
+    var segment = this.encoderOutputBuffer.subarray( packetIndex, packetIndex + segmentLength );
+    this.segmentData.set( segment, this.segmentDataIndex );
+    global['postMessage']({ type: 'opus', data: segment });
     this.segmentDataIndex += segmentLength;
     packetIndex += segmentLength;
     packetLength -= 255;
