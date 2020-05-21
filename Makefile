@@ -30,6 +30,10 @@ WAVE_WORKER_SRC=$(INPUT_DIR)/waveWorker.js
 
 default: $(LIBOPUS_ENCODER) $(LIBOPUS_ENCODER_MIN) $(LIBOPUS_DECODER) $(LIBOPUS_DECODER_MIN) $(RECORDER) $(RECORDER_MIN) $(WAVE_WORKER) $(WAVE_WORKER_MIN) test
 
+recorder:
+	npm run webpack -- --output-library Recorder --output-library-target umd $(RECORDER_SRC) $(RECORDER)
+	npm run webpack -- --output-library Recorder --output-library-target umd --optimize-minimize  $(RECORDER_SRC) $(RECORDER_MIN)
+
 clean:
 	rm -rf $(OUTPUT_DIR) $(OUTPUT_DIR_UNMINIFIED) $(LIBOPUS_DIR) $(LIBSPEEXDSP_DIR)
 	mkdir $(OUTPUT_DIR)

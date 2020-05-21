@@ -28,6 +28,7 @@ var Recorder = function( config ){
     streamPages: false,
     reuseWorker: false,
     wavBitDepth: 16,
+    streamOpusPackets: true
   }, config );
 
   this.encodedSamplePosition = 0;
@@ -131,7 +132,7 @@ Recorder.prototype.loadWorker = function() {
 };
 
 Recorder.prototype.initWorker = function(){
-  var onPage = (this.config.streamPages ? this.streamPage : this.storePage).bind(this);
+  var onPage = (this.config.streamOpusPackets ? this.streamOpusPacket : (this.config.streamPages ? this.streamPage : this.storePage)).bind(this);
 
   this.recordedPages = [];
   this.totalLength = 0;
@@ -145,7 +146,11 @@ Recorder.prototype.initWorker = function(){
           break;
         case 'page':
           this.encodedSamplePosition = e['data']['samplePosition'];
-          onPage(e['data']['page']);
+          if (this.config.streamOpusPackets && typeof e['data'] === 'object' && e['data']['type'] === 'opus'){
+            this.streamOpusPacket( e['data']['data'] );
+            break;
+          }
+          onPage( e['data']['page'] );
           break;
         case 'done':
           this.encoder.removeEventListener( "message", callback );
@@ -271,6 +276,13 @@ Recorder.prototype.streamPage = function( page ) {
   this.ondataavailable( page );
 };
 
+Recorder.prototype.streamOpusPacket = function(packet) {
+  if ( packet === null ){
+    return;
+  }
+  this.onopusdataavailable(packet);
+};
+
 Recorder.prototype.finish = function() {
   if( !this.config.streamPages ) {
     var outputData = new Uint8Array( this.totalLength );
@@ -294,6 +306,7 @@ Recorder.prototype.onpause = function(){};
 Recorder.prototype.onresume = function(){};
 Recorder.prototype.onstart = function(){};
 Recorder.prototype.onstop = function(){};
+Recorder.prototype.onopusdataavailable = function(){};
 
 
 module.exports = Recorder;
