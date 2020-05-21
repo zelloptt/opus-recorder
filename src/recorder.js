@@ -146,7 +146,7 @@ Recorder.prototype.initWorker = function(){
           break;
         case 'page':
           this.encodedSamplePosition = e['data']['samplePosition'];
-          if (this.config.streamOpusPackets && typeof e['data'] === 'object' && e['data']['type'] === 'opus'){
+          if ( this.config.streamOpusPackets && typeof e['data'] === 'object' && e['data']['type'] === 'opus' ){
             this.streamOpusPacket( e['data']['data'] );
             break;
           }
