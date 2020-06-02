@@ -71,19 +71,13 @@ var OggOpusEncoder = function( config, Module ){
     originalSampleRate: 44100,
     resampleQuality: 3, // Value between 0 and 10 inclusive. 10 being highest quality.
     serial: Math.floor(Math.random() * 4294967296),
-    streamOpusPackets: false,
-    framesPerPacket: 1 // Only used when streamOpusPackets is true. [encoderFrameSize] * [framesPerPacket] <= 120 ms
+    streamOpusPackets: true,
+    framesPerCallback: 1 // Value between 1 and 2 inclusive. Only used when streamOpusPackets is true.
   }, config );
 
   this._opus_encoder_create = Module._opus_encoder_create;
   this._opus_encoder_destroy = Module._opus_encoder_destroy;
   this._opus_encoder_ctl = Module._opus_encoder_ctl;
-  this._opus_repacketizer_create = Module._opus_repacketizer_create;
-  this._opus_repacketizer_cat = Module._opus_repacketizer_cat;
-  this._opus_repacketizer_get_nb_frames = Module._opus_repacketizer_get_nb_frames;
-  this._opus_repacketizer_out = Module._opus_repacketizer_out;
-  this._opus_repacketizer_init = Module._opus_repacketizer_init;
-  this._opus_repacketizer_destroy = Module._opus_repacketizer_destroy;
   this._speex_resampler_process_interleaved_float = Module._speex_resampler_process_interleaved_float;
   this._speex_resampler_init = Module._speex_resampler_init;
   this._speex_resampler_destroy = Module._speex_resampler_destroy;
@@ -101,14 +95,11 @@ var OggOpusEncoder = function( config, Module ){
   this.segmentTable = new Uint8Array( 255 ); // Maximum data segments
   this.segmentTableIndex = 0;
   this.framesInPage = 0;
-  this.framesInPacket = 0;
+  this.framesInCallback = 0;
 
   this.initChecksumTable();
   this.initCodec();
   this.initResampler();
-  if ( this.config.streamOpusPackets && this.config.framesPerPacket > 1 ) {
-    this.initRepacketizer();
-  }
 
   if ( this.config.numberOfChannels === 1 ) {
     this.interleave = function( buffers ) { return buffers[0]; };
@@ -161,10 +152,6 @@ OggOpusEncoder.prototype.destroy = function() {
     this._opus_encoder_destroy(this.encoder);
     delete this.encoder;
   }
-  if ( this.repacketizer ) {
-    this._opus_repacketizer_destroy(this.repacketizer);
-    delete this.repacketizer;
-  }
 };
 
 OggOpusEncoder.prototype.flush = function() {
@@ -173,7 +160,6 @@ OggOpusEncoder.prototype.flush = function() {
   }
   // discard any pending data in resample buffer (only a few ms worth)
   this.resampleBufferIndex = 0;
-  this.framesInPacket = 0;
   global['postMessage']( {message: 'flushed'} );
 };
 
@@ -323,12 +309,6 @@ OggOpusEncoder.prototype.initResampler = function() {
   this.resampleBuffer = this.HEAPF32.subarray( this.resampleBufferPointer >> 2, (this.resampleBufferPointer >> 2) + this.resampleBufferLength );
 };
 
-OggOpusEncoder.prototype.initRepacketizer = function() {
-  this.repacketizer = this._opus_repacketizer_create();
-  var maxFrameBytes = 1276;
-  this.packetLength = (1 + maxFrameBytes) * this.config.framesPerPacket;
-};
-
 OggOpusEncoder.prototype.interleave = function( buffers ) {
   for ( var i = 0; i < this.config.bufferLength; i++ ) {
     for ( var channel = 0; channel < this.config.numberOfChannels; channel++ ) {
@@ -352,34 +332,20 @@ OggOpusEncoder.prototype.segmentPacket = function( packetLength ) {
     var segmentLength = Math.min( packetLength, 255 );
     this.segmentTable[ this.segmentTableIndex++ ] = segmentLength;
     var segment = this.encoderOutputBuffer.subarray( packetIndex, packetIndex + segmentLength );
-    this.segmentData.set( segment, this.segmentDataIndex );
-    if (this.config.streamOpusPackets) {
-      if (this.config.framesPerPacket === 1) {
-        global['postMessage']({ type: 'opus', data: segment });
-      } else {
-        ++this.framesInPacket;
-        // Add the segment to the repacketizer
-        var x = this._opus_repacketizer_cat( this.repacketizer, this.HEAPU8[this.encoderOutputPointer + packetIndex], segmentLength );
-        // 0 means success, OPUS_OK
-        console.log(x);
-        if ( this.framesInPacket === this.config.framesPerPacket ) {
-          debugger;
-          // Create an output buffer
-          var packetPointer = this._malloc( this.packetLength );
-          var y = this._opus_repacketizer_out( this.repacketizer, packetPointer, this.packetLength );
-          console.log(y);
-          // Get the output buffer from the heap
-          var packet = this.HEAPU8.subarray( packetPointer, packetPointer + this.packetLength );
-          console.log(packet);
-          global['postMessage']({type: 'opus', data: packet});
-          this._free( packetPointer );
 
-          // Reset the state
-          this._opus_repacketizer_init( this.repacketizer );
-          this.framesInPacket = 0;
-        }
+    if ( this.config.streamOpusPackets ) {
+      if ( this.config.framesPerCallback === 1 ) {
+        global['postMessage']({ type: 'opus', data: segment });
+      } else if ( ++this.framesInCallback === this.config.framesPerCallback ) {
+        var cachedSegmentLength = this.segmentTable[this.segmentTableIndex - 2];
+        var cachedSegment = this.segmentData.subarray( this.segmentDataIndex - cachedSegmentLength, this.segmentDataIndex );
+
+        global['postMessage']({ type: 'opus', data: [cachedSegment, segment] });
+        this.framesInCallback = 0;
       }
     }
+
+    this.segmentData.set( segment, this.segmentDataIndex );
     this.segmentDataIndex += segmentLength;
     packetIndex += segmentLength;
     packetLength -= 255;
