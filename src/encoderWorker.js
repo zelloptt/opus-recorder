@@ -337,10 +337,10 @@ OggOpusEncoder.prototype.segmentPacket = function( packetLength ) {
       if ( this.config.framesPerCallback === 1 ) {
         global['postMessage']({ type: 'opus', data: segment });
       } else if ( ++this.framesInCallback === this.config.framesPerCallback ) {
-        var cachedSegmentLength = this.segmentTable[this.segmentTableIndex - 2];
+        var cachedSegmentLength = this.segmentTable[ this.segmentTableIndex - 2 ];
         var cachedSegment = this.segmentData.subarray( this.segmentDataIndex - cachedSegmentLength, this.segmentDataIndex );
 
-        global['postMessage']({ type: 'opus', data: [cachedSegment, segment] });
+        global['postMessage']({ type: 'opus', data: [ cachedSegment, segment ] });
         this.framesInCallback = 0;
       }
     }
