@@ -70,7 +70,9 @@ var OggOpusEncoder = function( config, Module ){
     numberOfChannels: 1,
     originalSampleRate: 44100,
     resampleQuality: 3, // Value between 0 and 10 inclusive. 10 being highest quality.
-    serial: Math.floor(Math.random() * 4294967296)
+    serial: Math.floor(Math.random() * 4294967296),
+    streamOpusPackets: true,
+    cacheFrameForCallback: false // When true, callbacks will contain an array of two frames. Only used when streamOpusPackets is true.
   }, config );
 
   this._opus_encoder_create = Module._opus_encoder_create;
@@ -93,6 +95,7 @@ var OggOpusEncoder = function( config, Module ){
   this.segmentTable = new Uint8Array( 255 ); // Maximum data segments
   this.segmentTableIndex = 0;
   this.framesInPage = 0;
+  this.framesInCallback = 0;
 
   this.initChecksumTable();
   this.initCodec();
@@ -329,8 +332,20 @@ OggOpusEncoder.prototype.segmentPacket = function( packetLength ) {
     var segmentLength = Math.min( packetLength, 255 );
     this.segmentTable[ this.segmentTableIndex++ ] = segmentLength;
     var segment = this.encoderOutputBuffer.subarray( packetIndex, packetIndex + segmentLength );
+
+    if ( this.config.streamOpusPackets ) {
+      if ( !this.config.cacheFrameForCallback ) {
+        global['postMessage']({ type: 'opus', data: segment });
+      } else if ( ++this.framesInCallback === 2 ) {
+        var cachedSegmentLength = this.segmentTable[ this.segmentTableIndex - 2 ];
+        var cachedSegment = this.segmentData.subarray( this.segmentDataIndex - cachedSegmentLength, this.segmentDataIndex );
+
+        global['postMessage']({ type: 'opus', data: [ cachedSegment, segment ] });
+        this.framesInCallback = 0;
+      }
+    }
+
     this.segmentData.set( segment, this.segmentDataIndex );
-    global['postMessage']({ type: 'opus', data: segment });
     this.segmentDataIndex += segmentLength;
     packetIndex += segmentLength;
     packetLength -= 255;
