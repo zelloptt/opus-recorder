@@ -72,7 +72,7 @@ var OggOpusEncoder = function( config, Module ){
     resampleQuality: 3, // Value between 0 and 10 inclusive. 10 being highest quality.
     serial: Math.floor(Math.random() * 4294967296),
     streamOpusPackets: true,
-    framesPerCallback: 1 // Value between 1 and 2 inclusive. Only used when streamOpusPackets is true.
+    cacheFrameForCallback: false // When true, callbacks will contain an array of two frames. Only used when streamOpusPackets is true.
   }, config );
 
   this._opus_encoder_create = Module._opus_encoder_create;
@@ -334,9 +334,9 @@ OggOpusEncoder.prototype.segmentPacket = function( packetLength ) {
     var segment = this.encoderOutputBuffer.subarray( packetIndex, packetIndex + segmentLength );
 
     if ( this.config.streamOpusPackets ) {
-      if ( this.config.framesPerCallback === 1 ) {
+      if ( !this.config.cacheFrameForCallback ) {
         global['postMessage']({ type: 'opus', data: segment });
-      } else if ( ++this.framesInCallback === this.config.framesPerCallback ) {
+      } else if ( ++this.framesInCallback === 2 ) {
         var cachedSegmentLength = this.segmentTable[ this.segmentTableIndex - 2 ];
         var cachedSegment = this.segmentData.subarray( this.segmentDataIndex - cachedSegmentLength, this.segmentDataIndex );
 
