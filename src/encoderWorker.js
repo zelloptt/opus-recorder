@@ -29,6 +29,7 @@ global['onmessage'] = function( e ){
         break;
 
       case 'close':
+        global['postMessage']( {message: 'close'} );
         global['close']();
         break;
 
@@ -53,7 +54,7 @@ global['onmessage'] = function( e ){
         break;
 
       default:
-        // Ignore any unknown commands and continue recieving commands
+        // Ignore any unknown commands and continue receiving commands
     }
   });
 };
