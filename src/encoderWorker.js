@@ -38,6 +38,12 @@ global['onmessage'] = function( e ){
         }
         break;
 
+      case 'destroy':
+        if (encoder) {
+          encoder.destroy();
+        }
+        break;
+
       case 'init':
         if ( encoder ) {
           encoder.destroy();
