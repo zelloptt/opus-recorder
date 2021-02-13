@@ -28,7 +28,7 @@ WAVE_WORKER=$(OUTPUT_DIR_UNMINIFIED)/waveWorker.js
 WAVE_WORKER_SRC=$(INPUT_DIR)/waveWorker.js
 
 
-default: $(LIBOPUS_ENCODER) $(LIBOPUS_ENCODER_MIN) $(LIBOPUS_DECODER) $(LIBOPUS_DECODER_MIN) $(RECORDER) $(RECORDER_MIN) $(WAVE_WORKER) $(WAVE_WORKER_MIN) test
+default: $(LIBOPUS_ENCODER) $(LIBOPUS_ENCODER_MIN) $(LIBOPUS_DECODER) $(LIBOPUS_DECODER_MIN) $(RECORDER) $(RECORDER_MIN) $(WAVE_WORKER) $(WAVE_WORKER_MIN) inline test
 
 recorder:
 	npm run webpack -- --output-library Recorder --output-library-target umd $(RECORDER_SRC) $(RECORDER)
@@ -38,6 +38,9 @@ clean:
 	rm -rf $(OUTPUT_DIR) $(OUTPUT_DIR_UNMINIFIED) $(LIBOPUS_DIR) $(LIBSPEEXDSP_DIR)
 	mkdir $(OUTPUT_DIR)
 	mkdir $(OUTPUT_DIR_UNMINIFIED)
+
+inline:
+	perl inliner.pl
 
 test:
 	# Tests need to run relative to `dist` folder for wasm file import
