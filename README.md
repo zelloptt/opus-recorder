@@ -215,7 +215,7 @@ pacman -S make autoconf automake libtool pkgconfig
 
 [Install Node.js](https://nodejs.org/en/download/)
 
-[Install EMScripten](https://kripken.github.io/emscripten-site/docs/getting_started/downloads.html)
+[Install EMScripten](https://kripken.github.io/emscripten-site/docs/getting_started/downloads.html) v1.38.48
 
 Install npm dependencies:
 ```bash

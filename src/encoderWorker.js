@@ -342,12 +342,12 @@ OggOpusEncoder.prototype.segmentPacket = function( packetLength ) {
 
     if ( this.config.streamOpusPackets ) {
       if ( !this.config.cacheFrameForCallback ) {
-        global['postMessage']({ type: 'opus', data: segment });
+        global['postMessage']({ type: 'opus', data: segment.slice(0) });
       } else if ( ++this.framesInCallback === 2 ) {
         var cachedSegmentLength = this.segmentTable[ this.segmentTableIndex - 2 ];
         var cachedSegment = this.segmentData.subarray( this.segmentDataIndex - cachedSegmentLength, this.segmentDataIndex );
 
-        global['postMessage']({ type: 'opus', data: [ cachedSegment, segment ] });
+        global['postMessage']({ type: 'opus', data: [ cachedSegment.slice(0), segment.slice(0) ] });
         this.framesInCallback = 0;
       }
     }
