@@ -78,8 +78,7 @@ var OggOpusEncoder = function( config, Module ){
     originalSampleRate: 44100,
     resampleQuality: 3, // Value between 0 and 10 inclusive. 10 being highest quality.
     serial: Math.floor(Math.random() * 4294967296),
-    streamOpusPackets: false,
-    cacheFrameForCallback: false // When true, callbacks will contain an array of two frames. Only used when streamOpusPackets is true.
+    streamOpusPackets: false
   }, config );
 
   this._opus_encoder_create = Module._opus_encoder_create;
@@ -102,7 +101,6 @@ var OggOpusEncoder = function( config, Module ){
   this.segmentTable = new Uint8Array( 255 ); // Maximum data segments
   this.segmentTableIndex = 0;
   this.framesInPage = 0;
-  this.framesInCallback = 0;
 
   this.initChecksumTable();
   this.initCodec();
@@ -191,7 +189,7 @@ OggOpusEncoder.prototype.getChecksum = function( data ){
 };
 
 OggOpusEncoder.prototype.generateCommentPage = function(){
-  if (this.config.streamOpusPackets) { return; }
+  if ( this.config.streamOpusPackets ) { return; }
   var segmentDataView = new DataView( this.segmentData.buffer );
   segmentDataView.setUint32( 0, 1937076303, true ) // Magic Signature 'Opus'
   segmentDataView.setUint32( 4, 1936154964, true ) // Magic Signature 'Tags'
@@ -207,7 +205,7 @@ OggOpusEncoder.prototype.generateCommentPage = function(){
 };
 
 OggOpusEncoder.prototype.generateIdPage = function(){
-  if (this.config.streamOpusPackets) { return; }
+  if ( this.config.streamOpusPackets ) { return; }
   var segmentDataView = new DataView( this.segmentData.buffer );
   segmentDataView.setUint32( 0, 1937076303, true ) // Magic Signature 'Opus'
   segmentDataView.setUint32( 4, 1684104520, true ) // Magic Signature 'Head'
@@ -224,7 +222,7 @@ OggOpusEncoder.prototype.generateIdPage = function(){
 };
 
 OggOpusEncoder.prototype.generatePage = function(){
-  if (this.config.streamOpusPackets) { return; }
+  if ( this.config.streamOpusPackets ) { return; }
   var granulePosition = ( this.lastPositiveGranulePosition === this.granulePosition) ? -1 : this.granulePosition;
   var pageBuffer = new ArrayBuffer(  27 + this.segmentTableIndex + this.segmentDataIndex );
   var pageBufferView = new DataView( pageBuffer );
@@ -330,6 +328,14 @@ OggOpusEncoder.prototype.interleave = function( buffers ) {
 };
 
 OggOpusEncoder.prototype.segmentPacket = function( packetLength ) {
+  if ( this.config.streamOpusPackets ) {
+    if ( packetLength > 0 ) {
+      var packet = new Uint8Array( HEAPU8.subarray(this.encoderOutputPointer, this.encoderOutputPointer + packetLength) );
+      global['postMessage']({ type: 'opus', data: packet });
+    }
+    return;
+  }
+
   var packetIndex = 0;
 
   while ( packetLength >= 0 ) {
@@ -342,16 +348,6 @@ OggOpusEncoder.prototype.segmentPacket = function( packetLength ) {
     var segmentLength = Math.min( packetLength, 255 );
     this.segmentTable[ this.segmentTableIndex++ ] = segmentLength;
     var segment = this.encoderOutputBuffer.subarray( packetIndex, packetIndex + segmentLength );
-
-    if ( !this.config.cacheFrameForCallback ) {
-      global['postMessage']({ type: 'opus', data: segment.slice() });
-    } else if ( ++this.framesInCallback === 2 ) {
-      var cachedSegmentLength = this.segmentTable[ this.segmentTableIndex - 2 ];
-      var cachedSegment = this.segmentData.subarray( this.segmentDataIndex - cachedSegmentLength, this.segmentDataIndex );
-
-      global['postMessage']({ type: 'opus', data: [ cachedSegment.slice(), segment.slice() ] });
-      this.framesInCallback = 0;
-    }
 
     this.segmentData.set( segment, this.segmentDataIndex );
     this.segmentDataIndex += segmentLength;
