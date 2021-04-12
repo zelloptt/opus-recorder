@@ -328,13 +328,6 @@ OggOpusEncoder.prototype.interleave = function( buffers ) {
 };
 
 OggOpusEncoder.prototype.segmentPacket = function( packetLength ) {
-  if (this.config.streamOpusPackets) {
-    if (packetLength > 0) {
-      var segment = new Uint8Array( HEAPU8.subarray(this.encoderOutputPointer, this.encoderOutputPointer + packetLength) );
-      global['postMessage']({ type: 'opus', data: segment });
-    }
-    return;
-  }
   var packetIndex = 0;
 
   while ( packetLength >= 0 ) {
@@ -347,6 +340,10 @@ OggOpusEncoder.prototype.segmentPacket = function( packetLength ) {
     var segmentLength = Math.min( packetLength, 255 );
     this.segmentTable[ this.segmentTableIndex++ ] = segmentLength;
     var segment = this.encoderOutputBuffer.subarray( packetIndex, packetIndex + segmentLength );
+
+    if ( this.config.streamOpusPackets ) {
+      global['postMessage']({ type: 'opus', data: segment.slice() });
+    }
 
     this.segmentData.set( segment, this.segmentDataIndex );
     this.segmentDataIndex += segmentLength;
