@@ -78,7 +78,7 @@ var OggOpusEncoder = function( config, Module ){
     originalSampleRate: 44100,
     resampleQuality: 3, // Value between 0 and 10 inclusive. 10 being highest quality.
     serial: Math.floor(Math.random() * 4294967296),
-    streamOpusPackets: false
+    streamOpusPackets: true
   }, config );
 
   this._opus_encoder_create = Module._opus_encoder_create;
