@@ -1,7 +1,8 @@
-// Copyright 2010 The Emscripten Authors.  All rights reserved.
-// Emscripten is available under two separate licenses, the MIT license and the
-// University of Illinois/NCSA Open Source License.  Both these licenses can be
-// found in the LICENSE file.
+/**
+ * @license
+ * Copyright 2010 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
 
 // The Module object: Our interface to the outside world. We import
 // and export values on it. There are various ways Module can be used:
@@ -137,7 +138,7 @@ eval("var g;\n\n// This works in non-strict mode\ng = (function() {\n\treturn th
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
-eval("/* WEBPACK VAR INJECTION */(function(global) {\n\nvar encoder;\nvar mainReadyResolve;\nvar mainReady = new Promise(function(resolve){ mainReadyResolve = resolve; });\n\nglobal['onmessage'] = function( e ){\n  mainReady.then(function(){\n    switch( e['data']['command'] ){\n\n      case 'encode':\n        if (encoder){\n          encoder.encode( e['data']['buffers'] );\n        }\n        break;\n\n      case 'getHeaderPages':\n        if (encoder){\n          encoder.generateIdPage();\n          encoder.generateCommentPage();\n        }\n        break;\n\n      case 'done':\n        if (encoder) {\n          encoder.encodeFinalFrame();\n          global['postMessage']( {message: 'done'} );\n        }\n        break;\n\n      case 'close':\n        global['close']();\n        break;\n\n      case 'flush':\n        if (encoder) {\n          encoder.flush();\n        }\n        break;\n\n      case 'destroy':\n        if (encoder) {\n          encoder.destroy();\n        }\n        break;\n\n      case 'init':\n        if ( encoder ) {\n          encoder.destroy();\n        }\n        encoder = new OggOpusEncoder( e['data'], Module );\n        global['postMessage']( {message: 'ready'} );\n        break;\n\n      default:\n        // Ignore any unknown commands and continue recieving commands\n    }\n  });\n};\n\n\nvar OggOpusEncoder = function( config, Module ){\n\n  if ( !Module ) {\n    throw new Error('Module with exports required to initialize an encoder instance');\n  }\n\n  this.config = Object.assign({ \n    bufferLength: 4096, // Define size of incoming buffer\n    encoderApplication: 2049, // 2048 = Voice (Lower fidelity)\n                              // 2049 = Full Band Audio (Highest fidelity)\n                              // 2051 = Restricted Low Delay (Lowest latency)\n    encoderFrameSize: 20, // Specified in ms.\n    encoderSampleRate: 48000, // Desired encoding sample rate. Audio will be resampled\n    maxFramesPerPage: 40, // Tradeoff latency with overhead\n    numberOfChannels: 1,\n    originalSampleRate: 44100,\n    resampleQuality: 3, // Value between 0 and 10 inclusive. 10 being highest quality.\n    serial: Math.floor(Math.random() * 4294967296),\n    streamOpusPackets: true,\n    cacheFrameForCallback: false // When true, callbacks will contain an array of two frames. Only used when streamOpusPackets is true.\n  }, config );\n\n  this._opus_encoder_create = Module._opus_encoder_create;\n  this._opus_encoder_destroy = Module._opus_encoder_destroy;\n  this._opus_encoder_ctl = Module._opus_encoder_ctl;\n  this._speex_resampler_process_interleaved_float = Module._speex_resampler_process_interleaved_float;\n  this._speex_resampler_init = Module._speex_resampler_init;\n  this._speex_resampler_destroy = Module._speex_resampler_destroy;\n  this._opus_encode_float = Module._opus_encode_float;\n  this._free = Module._free;\n  this._malloc = Module._malloc;\n  this.HEAPU8 = Module.HEAPU8;\n  this.HEAP32 = Module.HEAP32;\n  this.HEAPF32 = Module.HEAPF32;\n\n  this.pageIndex = 0;\n  this.granulePosition = 0;\n  this.segmentData = new Uint8Array( 65025 ); // Maximum length of oggOpus data\n  this.segmentDataIndex = 0;\n  this.segmentTable = new Uint8Array( 255 ); // Maximum data segments\n  this.segmentTableIndex = 0;\n  this.framesInPage = 0;\n  this.framesInCallback = 0;\n\n  this.initChecksumTable();\n  this.initCodec();\n  this.initResampler();\n\n  if ( this.config.numberOfChannels === 1 ) {\n    this.interleave = function( buffers ) { return buffers[0]; };\n  }\n  else {\n    this.interleavedBuffers = new Float32Array( this.config.bufferLength * this.config.numberOfChannels );\n  }\n\n};\n\nOggOpusEncoder.prototype.encode = function( buffers ) {\n  var samples = this.interleave( buffers );\n  var sampleIndex = 0;\n\n  while ( sampleIndex < samples.length ) {\n\n    var lengthToCopy = Math.min( this.resampleBufferLength - this.resampleBufferIndex, samples.length - sampleIndex );\n    this.resampleBuffer.set( samples.subarray( sampleIndex, sampleIndex+lengthToCopy ), this.resampleBufferIndex );\n    sampleIndex += lengthToCopy;\n    this.resampleBufferIndex += lengthToCopy;\n\n    if ( this.resampleBufferIndex === this.resampleBufferLength ) {\n      this._speex_resampler_process_interleaved_float( this.resampler, this.resampleBufferPointer, this.resampleSamplesPerChannelPointer, this.encoderBufferPointer, this.encoderSamplesPerChannelPointer );\n      var packetLength = this._opus_encode_float( this.encoder, this.encoderBufferPointer, this.encoderSamplesPerChannel, this.encoderOutputPointer, this.encoderOutputMaxLength );\n      this.segmentPacket( packetLength );\n      this.resampleBufferIndex = 0;\n\n      this.framesInPage++;\n      if ( this.framesInPage >= this.config.maxFramesPerPage ) {\n        this.generatePage();\n      }\n    }\n  }\n};\n\nOggOpusEncoder.prototype.destroy = function() {\n  if ( this.encoder ) {\n    this._free(this.encoderSamplesPerChannelPointer);\n    delete this.encoderSamplesPerChannelPointer;\n    this._free(this.encoderBufferPointer);\n    delete this.encoderBufferPointer;\n    this._free(this.encoderOutputPointer);\n    delete this.encoderOutputPointer;\n    this._free(this.resampleSamplesPerChannelPointer);\n    delete this.resampleSamplesPerChannelPointer;\n    this._free(this.resampleBufferPointer);\n    delete this.resampleBufferPointer;\n    this._speex_resampler_destroy(this.resampler);\n    delete this.resampler;\n    this._opus_encoder_destroy(this.encoder);\n    delete this.encoder;\n  }\n};\n\nOggOpusEncoder.prototype.flush = function() {\n  if ( this.framesInPage ) {\n    this.generatePage();\n  }\n  // discard any pending data in resample buffer (only a few ms worth)\n  this.resampleBufferIndex = 0;\n  global['postMessage']( {message: 'flushed'} );\n};\n\nOggOpusEncoder.prototype.encodeFinalFrame = function() {\n  if ( this.resampleBufferIndex > 0 ) {\n    var finalFrameBuffers = [];\n    for ( var i = 0; i < this.config.numberOfChannels; ++i ) {\n      finalFrameBuffers.push( new Float32Array( this.config.bufferLength - (this.resampleBufferIndex / this.config.numberOfChannels) ));\n    }\n    this.encode( finalFrameBuffers );\n  }\n  this.headerType += 4;\n  this.generatePage();\n};\n\nOggOpusEncoder.prototype.getChecksum = function( data ){\n  var checksum = 0;\n  for ( var i = 0; i < data.length; i++ ) {\n    checksum = (checksum << 8) ^ this.checksumTable[ ((checksum>>>24) & 0xff) ^ data[i] ];\n  }\n  return checksum >>> 0;\n};\n\nOggOpusEncoder.prototype.generateCommentPage = function(){\n  var segmentDataView = new DataView( this.segmentData.buffer );\n  segmentDataView.setUint32( 0, 1937076303, true ) // Magic Signature 'Opus'\n  segmentDataView.setUint32( 4, 1936154964, true ) // Magic Signature 'Tags'\n  segmentDataView.setUint32( 8, 10, true ); // Vendor Length\n  segmentDataView.setUint32( 12, 1868784978, true ); // Vendor name 'Reco'\n  segmentDataView.setUint32( 16, 1919247474, true ); // Vendor name 'rder'\n  segmentDataView.setUint16( 20, 21322, true ); // Vendor name 'JS'\n  segmentDataView.setUint32( 22, 0, true ); // User Comment List Length\n  this.segmentTableIndex = 1;\n  this.segmentDataIndex = this.segmentTable[0] = 26;\n  this.headerType = 0;\n  this.generatePage();\n};\n\nOggOpusEncoder.prototype.generateIdPage = function(){\n  var segmentDataView = new DataView( this.segmentData.buffer );\n  segmentDataView.setUint32( 0, 1937076303, true ) // Magic Signature 'Opus'\n  segmentDataView.setUint32( 4, 1684104520, true ) // Magic Signature 'Head'\n  segmentDataView.setUint8( 8, 1, true ); // Version\n  segmentDataView.setUint8( 9, this.config.numberOfChannels, true ); // Channel count\n  segmentDataView.setUint16( 10, 3840, true ); // pre-skip (80ms)\n  segmentDataView.setUint32( 12, this.config.originalSampleRateOverride || this.config.originalSampleRate, true ); // original sample rate\n  segmentDataView.setUint16( 16, 0, true ); // output gain\n  segmentDataView.setUint8( 18, 0, true ); // channel map 0 = mono or stereo\n  this.segmentTableIndex = 1;\n  this.segmentDataIndex = this.segmentTable[0] = 19;\n  this.headerType = 2;\n  this.generatePage();\n};\n\nOggOpusEncoder.prototype.generatePage = function(){\n  var granulePosition = ( this.lastPositiveGranulePosition === this.granulePosition) ? -1 : this.granulePosition;\n  var pageBuffer = new ArrayBuffer(  27 + this.segmentTableIndex + this.segmentDataIndex );\n  var pageBufferView = new DataView( pageBuffer );\n  var page = new Uint8Array( pageBuffer );\n\n  pageBufferView.setUint32( 0, 1399285583, true); // Capture Pattern starts all page headers 'OggS'\n  pageBufferView.setUint8( 4, 0, true ); // Version\n  pageBufferView.setUint8( 5, this.headerType, true ); // 1 = continuation, 2 = beginning of stream, 4 = end of stream\n\n  // Number of samples upto and including this page at 48000Hz, into signed 64 bit Little Endian integer\n  // Javascript Number maximum value is 53 bits or 2^53 - 1 \n  pageBufferView.setUint32( 6, granulePosition, true );\n  if (granulePosition < 0) {\n    pageBufferView.setInt32( 10, Math.ceil(granulePosition/4294967297) - 1, true );\n  }\n  else {\n    pageBufferView.setInt32( 10, Math.floor(granulePosition/4294967296), true );\n  }\n\n  pageBufferView.setUint32( 14, this.config.serial, true ); // Bitstream serial number\n  pageBufferView.setUint32( 18, this.pageIndex++, true ); // Page sequence number\n  pageBufferView.setUint8( 26, this.segmentTableIndex, true ); // Number of segments in page.\n  page.set( this.segmentTable.subarray(0, this.segmentTableIndex), 27 ); // Segment Table\n  page.set( this.segmentData.subarray(0, this.segmentDataIndex), 27 + this.segmentTableIndex ); // Segment Data\n  pageBufferView.setUint32( 22, this.getChecksum( page ), true ); // Checksum\n\n  global['postMessage']( {message: 'page', page: page, samplePosition: this.granulePosition}, [page.buffer] );\n  this.segmentTableIndex = 0;\n  this.segmentDataIndex = 0;\n  this.framesInPage = 0;\n  if ( granulePosition > 0 ) {\n    this.lastPositiveGranulePosition = granulePosition;\n  }\n};\n\nOggOpusEncoder.prototype.initChecksumTable = function(){\n  this.checksumTable = [];\n  for ( var i = 0; i < 256; i++ ) {\n    var r = i << 24;\n    for ( var j = 0; j < 8; j++ ) {\n      r = ((r & 0x80000000) != 0) ? ((r << 1) ^ 0x04c11db7) : (r << 1);\n    }\n    this.checksumTable[i] = (r & 0xffffffff);\n  }\n};\n\nOggOpusEncoder.prototype.setOpusControl = function( control, value ){\n  var location = this._malloc( 4 );\n  this.HEAP32[ location >> 2 ] = value;\n  this._opus_encoder_ctl( this.encoder, control, location );\n  this._free( location );\n};\n\nOggOpusEncoder.prototype.initCodec = function() {\n  var errLocation = this._malloc( 4 );\n  this.encoder = this._opus_encoder_create( this.config.encoderSampleRate, this.config.numberOfChannels, this.config.encoderApplication, errLocation );\n  this._free( errLocation );\n\n  if ( this.config.encoderBitRate ) {\n    this.setOpusControl( 4002, this.config.encoderBitRate );\n  }\n\n  if ( this.config.encoderComplexity ) {\n    this.setOpusControl( 4010, this.config.encoderComplexity );\n  }\n\n  this.encoderSamplesPerChannel = this.config.encoderSampleRate * this.config.encoderFrameSize / 1000;\n  this.encoderSamplesPerChannelPointer = this._malloc( 4 );\n  this.HEAP32[ this.encoderSamplesPerChannelPointer >> 2 ] = this.encoderSamplesPerChannel;\n\n  this.encoderBufferLength = this.encoderSamplesPerChannel * this.config.numberOfChannels;\n  this.encoderBufferPointer = this._malloc( this.encoderBufferLength * 4 ); // 4 bytes per sample\n  this.encoderBuffer = this.HEAPF32.subarray( this.encoderBufferPointer >> 2, (this.encoderBufferPointer >> 2) + this.encoderBufferLength );\n\n  this.encoderOutputMaxLength = 4000;\n  this.encoderOutputPointer = this._malloc( this.encoderOutputMaxLength );\n  this.encoderOutputBuffer = this.HEAPU8.subarray( this.encoderOutputPointer, this.encoderOutputPointer + this.encoderOutputMaxLength );\n};\n\nOggOpusEncoder.prototype.initResampler = function() {\n  var errLocation = this._malloc( 4 );\n  this.resampler = this._speex_resampler_init( this.config.numberOfChannels, this.config.originalSampleRate, this.config.encoderSampleRate, this.config.resampleQuality, errLocation );\n  this._free( errLocation );\n\n  this.resampleBufferIndex = 0;\n  this.resampleSamplesPerChannel = this.config.originalSampleRate * this.config.encoderFrameSize / 1000;\n  this.resampleSamplesPerChannelPointer = this._malloc( 4 );\n  this.HEAP32[ this.resampleSamplesPerChannelPointer >> 2 ] = this.resampleSamplesPerChannel;\n\n  this.resampleBufferLength = this.resampleSamplesPerChannel * this.config.numberOfChannels;\n  this.resampleBufferPointer = this._malloc( this.resampleBufferLength * 4 ); // 4 bytes per sample\n  this.resampleBuffer = this.HEAPF32.subarray( this.resampleBufferPointer >> 2, (this.resampleBufferPointer >> 2) + this.resampleBufferLength );\n};\n\nOggOpusEncoder.prototype.interleave = function( buffers ) {\n  for ( var i = 0; i < this.config.bufferLength; i++ ) {\n    for ( var channel = 0; channel < this.config.numberOfChannels; channel++ ) {\n      this.interleavedBuffers[ i * this.config.numberOfChannels + channel ] = buffers[ channel ][ i ];\n    }\n  }\n\n  return this.interleavedBuffers;\n};\n\nOggOpusEncoder.prototype.segmentPacket = function( packetLength ) {\n  var packetIndex = 0;\n\n  while ( packetLength >= 0 ) {\n\n    if ( this.segmentTableIndex === 255 ) {\n      this.generatePage();\n      this.headerType = 1;\n    }\n\n    var segmentLength = Math.min( packetLength, 255 );\n    this.segmentTable[ this.segmentTableIndex++ ] = segmentLength;\n    var segment = this.encoderOutputBuffer.subarray( packetIndex, packetIndex + segmentLength );\n\n    if ( this.config.streamOpusPackets ) {\n      if ( !this.config.cacheFrameForCallback ) {\n        global['postMessage']({ type: 'opus', data: segment });\n      } else if ( ++this.framesInCallback === 2 ) {\n        var cachedSegmentLength = this.segmentTable[ this.segmentTableIndex - 2 ];\n        var cachedSegment = this.segmentData.subarray( this.segmentDataIndex - cachedSegmentLength, this.segmentDataIndex );\n\n        global['postMessage']({ type: 'opus', data: [ cachedSegment, segment ] });\n        this.framesInCallback = 0;\n      }\n    }\n\n    this.segmentData.set( segment, this.segmentDataIndex );\n    this.segmentDataIndex += segmentLength;\n    packetIndex += segmentLength;\n    packetLength -= 255;\n  }\n\n  this.granulePosition += ( 48 * this.config.encoderFrameSize );\n  if ( this.segmentTableIndex === 255 ) {\n    this.generatePage();\n    this.headerType = 0;\n  }\n};\n\n\nif (!Module) {\n  Module = {};\n}\n\nModule['mainReady'] = mainReady;\nModule['OggOpusEncoder'] = OggOpusEncoder;\nModule['onRuntimeInitialized'] = mainReadyResolve;\n\nmodule.exports = Module;\n\n/* WEBPACK VAR INJECTION */}.call(this, __webpack_require__(/*! ./../node_modules/webpack/buildin/global.js */ \"./node_modules/webpack/buildin/global.js\")))//# sourceURL=[module]\n//# sourceMappingURL=data:application/json;charset=utf-8;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoiLi9zcmMvZW5jb2Rlcldvcmtlci5qcy5qcyIsInNvdXJjZXMiOlsid2VicGFjazovL0VuY29kZXJXb3JrZXIvLi9zcmMvZW5jb2Rlcldvcmtlci5qcz84YjNjIl0sInNvdXJjZXNDb250ZW50IjpbIlwidXNlIHN0cmljdFwiO1xuXG52YXIgZW5jb2RlcjtcbnZhciBtYWluUmVhZHlSZXNvbHZlO1xudmFyIG1haW5SZWFkeSA9IG5ldyBQcm9taXNlKGZ1bmN0aW9uKHJlc29sdmUpeyBtYWluUmVhZHlSZXNvbHZlID0gcmVzb2x2ZTsgfSk7XG5cbmdsb2JhbFsnb25tZXNzYWdlJ10gPSBmdW5jdGlvbiggZSApe1xuICBtYWluUmVhZHkudGhlbihmdW5jdGlvbigpe1xuICAgIHN3aXRjaCggZVsnZGF0YSddWydjb21tYW5kJ10gKXtcblxuICAgICAgY2FzZSAnZW5jb2RlJzpcbiAgICAgICAgaWYgKGVuY29kZXIpe1xuICAgICAgICAgIGVuY29kZXIuZW5jb2RlKCBlWydkYXRhJ11bJ2J1ZmZlcnMnXSApO1xuICAgICAgICB9XG4gICAgICAgIGJyZWFrO1xuXG4gICAgICBjYXNlICdnZXRIZWFkZXJQYWdlcyc6XG4gICAgICAgIGlmIChlbmNvZGVyKXtcbiAgICAgICAgICBlbmNvZGVyLmdlbmVyYXRlSWRQYWdlKCk7XG4gICAgICAgICAgZW5jb2Rlci5nZW5lcmF0ZUNvbW1lbnRQYWdlKCk7XG4gICAgICAgIH1cbiAgICAgICAgYnJlYWs7XG5cbiAgICAgIGNhc2UgJ2RvbmUnOlxuICAgICAgICBpZiAoZW5jb2Rlcikge1xuICAgICAgICAgIGVuY29kZXIuZW5jb2RlRmluYWxGcmFtZSgpO1xuICAgICAgICAgIGdsb2JhbFsncG9zdE1lc3NhZ2UnXSgge21lc3NhZ2U6ICdkb25lJ30gKTtcbiAgICAgICAgfVxuICAgICAgICBicmVhaztcblxuICAgICAgY2FzZSAnY2xvc2UnOlxuICAgICAgICBnbG9iYWxbJ2Nsb3NlJ10oKTtcbiAgICAgICAgYnJlYWs7XG5cbiAgICAgIGNhc2UgJ2ZsdXNoJzpcbiAgICAgICAgaWYgKGVuY29kZXIpIHtcbiAgICAgICAgICBlbmNvZGVyLmZsdXNoKCk7XG4gICAgICAgIH1cbiAgICAgICAgYnJlYWs7XG5cbiAgICAgIGNhc2UgJ2Rlc3Ryb3knOlxuICAgICAgICBpZiAoZW5jb2Rlcikge1xuICAgICAgICAgIGVuY29kZXIuZGVzdHJveSgpO1xuICAgICAgICB9XG4gICAgICAgIGJyZWFrO1xuXG4gICAgICBjYXNlICdpbml0JzpcbiAgICAgICAgaWYgKCBlbmNvZGVyICkge1xuICAgICAgICAgIGVuY29kZXIuZGVzdHJveSgpO1xuICAgICAgICB9XG4gICAgICAgIGVuY29kZXIgPSBuZXcgT2dnT3B1c0VuY29kZXIoIGVbJ2RhdGEnXSwgTW9kdWxlICk7XG4gICAgICAgIGdsb2JhbFsncG9zdE1lc3NhZ2UnXSgge21lc3NhZ2U6ICdyZWFkeSd9ICk7XG4gICAgICAgIGJyZWFrO1xuXG4gICAgICBkZWZhdWx0OlxuICAgICAgICAvLyBJZ25vcmUgYW55IHVua25vd24gY29tbWFuZHMgYW5kIGNvbnRpbnVlIHJlY2lldmluZyBjb21tYW5kc1xuICAgIH1cbiAgfSk7XG59O1xuXG5cbnZhciBPZ2dPcHVzRW5jb2RlciA9IGZ1bmN0aW9uKCBjb25maWcsIE1vZHVsZSApe1xuXG4gIGlmICggIU1vZHVsZSApIHtcbiAgICB0aHJvdyBuZXcgRXJyb3IoJ01vZHVsZSB3aXRoIGV4cG9ydHMgcmVxdWlyZWQgdG8gaW5pdGlhbGl6ZSBhbiBlbmNvZGVyIGluc3RhbmNlJyk7XG4gIH1cblxuICB0aGlzLmNvbmZpZyA9IE9iamVjdC5hc3NpZ24oeyBcbiAgICBidWZmZXJMZW5ndGg6IDQwOTYsIC8vIERlZmluZSBzaXplIG9mIGluY29taW5nIGJ1ZmZlclxuICAgIGVuY29kZXJBcHBsaWNhdGlvbjogMjA0OSwgLy8gMjA0OCA9IFZvaWNlIChMb3dlciBmaWRlbGl0eSlcbiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC8vIDIwNDkgPSBGdWxsIEJhbmQgQXVkaW8gKEhpZ2hlc3QgZmlkZWxpdHkpXG4gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAvLyAyMDUxID0gUmVzdHJpY3RlZCBMb3cgRGVsYXkgKExvd2VzdCBsYXRlbmN5KVxuICAgIGVuY29kZXJGcmFtZVNpemU6IDIwLCAvLyBTcGVjaWZpZWQgaW4gbXMuXG4gICAgZW5jb2RlclNhbXBsZVJhdGU6IDQ4MDAwLCAvLyBEZXNpcmVkIGVuY29kaW5nIHNhbXBsZSByYXRlLiBBdWRpbyB3aWxsIGJlIHJlc2FtcGxlZFxuICAgIG1heEZyYW1lc1BlclBhZ2U6IDQwLCAvLyBUcmFkZW9mZiBsYXRlbmN5IHdpdGggb3ZlcmhlYWRcbiAgICBudW1iZXJPZkNoYW5uZWxzOiAxLFxuICAgIG9yaWdpbmFsU2FtcGxlUmF0ZTogNDQxMDAsXG4gICAgcmVzYW1wbGVRdWFsaXR5OiAzLCAvLyBWYWx1ZSBiZXR3ZWVuIDAgYW5kIDEwIGluY2x1c2l2ZS4gMTAgYmVpbmcgaGlnaGVzdCBxdWFsaXR5LlxuICAgIHNlcmlhbDogTWF0aC5mbG9vcihNYXRoLnJhbmRvbSgpICogNDI5NDk2NzI5NiksXG4gICAgc3RyZWFtT3B1c1BhY2tldHM6IHRydWUsXG4gICAgY2FjaGVGcmFtZUZvckNhbGxiYWNrOiBmYWxzZSAvLyBXaGVuIHRydWUsIGNhbGxiYWNrcyB3aWxsIGNvbnRhaW4gYW4gYXJyYXkgb2YgdHdvIGZyYW1lcy4gT25seSB1c2VkIHdoZW4gc3RyZWFtT3B1c1BhY2tldHMgaXMgdHJ1ZS5cbiAgfSwgY29uZmlnICk7XG5cbiAgdGhpcy5fb3B1c19lbmNvZGVyX2NyZWF0ZSA9IE1vZHVsZS5fb3B1c19lbmNvZGVyX2NyZWF0ZTtcbiAgdGhpcy5fb3B1c19lbmNvZGVyX2Rlc3Ryb3kgPSBNb2R1bGUuX29wdXNfZW5jb2Rlcl9kZXN0cm95O1xuICB0aGlzLl9vcHVzX2VuY29kZXJfY3RsID0gTW9kdWxlLl9vcHVzX2VuY29kZXJfY3RsO1xuICB0aGlzLl9zcGVleF9yZXNhbXBsZXJfcHJvY2Vzc19pbnRlcmxlYXZlZF9mbG9hdCA9IE1vZHVsZS5fc3BlZXhfcmVzYW1wbGVyX3Byb2Nlc3NfaW50ZXJsZWF2ZWRfZmxvYXQ7XG4gIHRoaXMuX3NwZWV4X3Jlc2FtcGxlcl9pbml0ID0gTW9kdWxlLl9zcGVleF9yZXNhbXBsZXJfaW5pdDtcbiAgdGhpcy5fc3BlZXhfcmVzYW1wbGVyX2Rlc3Ryb3kgPSBNb2R1bGUuX3NwZWV4X3Jlc2FtcGxlcl9kZXN0cm95O1xuICB0aGlzLl9vcHVzX2VuY29kZV9mbG9hdCA9IE1vZHVsZS5fb3B1c19lbmNvZGVfZmxvYXQ7XG4gIHRoaXMuX2ZyZWUgPSBNb2R1bGUuX2ZyZWU7XG4gIHRoaXMuX21hbGxvYyA9IE1vZHVsZS5fbWFsbG9jO1xuICB0aGlzLkhFQVBVOCA9IE1vZHVsZS5IRUFQVTg7XG4gIHRoaXMuSEVBUDMyID0gTW9kdWxlLkhFQVAzMjtcbiAgdGhpcy5IRUFQRjMyID0gTW9kdWxlLkhFQVBGMzI7XG5cbiAgdGhpcy5wYWdlSW5kZXggPSAwO1xuICB0aGlzLmdyYW51bGVQb3NpdGlvbiA9IDA7XG4gIHRoaXMuc2VnbWVudERhdGEgPSBuZXcgVWludDhBcnJheSggNjUwMjUgKTsgLy8gTWF4aW11bSBsZW5ndGggb2Ygb2dnT3B1cyBkYXRhXG4gIHRoaXMuc2VnbWVudERhdGFJbmRleCA9IDA7XG4gIHRoaXMuc2VnbWVudFRhYmxlID0gbmV3IFVpbnQ4QXJyYXkoIDI1NSApOyAvLyBNYXhpbXVtIGRhdGEgc2VnbWVudHNcbiAgdGhpcy5zZWdtZW50VGFibGVJbmRleCA9IDA7XG4gIHRoaXMuZnJhbWVzSW5QYWdlID0gMDtcbiAgdGhpcy5mcmFtZXNJbkNhbGxiYWNrID0gMDtcblxuICB0aGlzLmluaXRDaGVja3N1bVRhYmxlKCk7XG4gIHRoaXMuaW5pdENvZGVjKCk7XG4gIHRoaXMuaW5pdFJlc2FtcGxlcigpO1xuXG4gIGlmICggdGhpcy5jb25maWcubnVtYmVyT2ZDaGFubmVscyA9PT0gMSApIHtcbiAgICB0aGlzLmludGVybGVhdmUgPSBmdW5jdGlvbiggYnVmZmVycyApIHsgcmV0dXJuIGJ1ZmZlcnNbMF07IH07XG4gIH1cbiAgZWxzZSB7XG4gICAgdGhpcy5pbnRlcmxlYXZlZEJ1ZmZlcnMgPSBuZXcgRmxvYXQzMkFycmF5KCB0aGlzLmNvbmZpZy5idWZmZXJMZW5ndGggKiB0aGlzLmNvbmZpZy5udW1iZXJPZkNoYW5uZWxzICk7XG4gIH1cblxufTtcblxuT2dnT3B1c0VuY29kZXIucHJvdG90eXBlLmVuY29kZSA9IGZ1bmN0aW9uKCBidWZmZXJzICkge1xuICB2YXIgc2FtcGxlcyA9IHRoaXMuaW50ZXJsZWF2ZSggYnVmZmVycyApO1xuICB2YXIgc2FtcGxlSW5kZXggPSAwO1xuXG4gIHdoaWxlICggc2FtcGxlSW5kZXggPCBzYW1wbGVzLmxlbmd0aCApIHtcblxuICAgIHZhciBsZW5ndGhUb0NvcHkgPSBNYXRoLm1pbiggdGhpcy5yZXNhbXBsZUJ1ZmZlckxlbmd0aCAtIHRoaXMucmVzYW1wbGVCdWZmZXJJbmRleCwgc2FtcGxlcy5sZW5ndGggLSBzYW1wbGVJbmRleCApO1xuICAgIHRoaXMucmVzYW1wbGVCdWZmZXIuc2V0KCBzYW1wbGVzLnN1YmFycmF5KCBzYW1wbGVJbmRleCwgc2FtcGxlSW5kZXgrbGVuZ3RoVG9Db3B5ICksIHRoaXMucmVzYW1wbGVCdWZmZXJJbmRleCApO1xuICAgIHNhbXBsZUluZGV4ICs9IGxlbmd0aFRvQ29weTtcbiAgICB0aGlzLnJlc2FtcGxlQnVmZmVySW5kZXggKz0gbGVuZ3RoVG9Db3B5O1xuXG4gICAgaWYgKCB0aGlzLnJlc2FtcGxlQnVmZmVySW5kZXggPT09IHRoaXMucmVzYW1wbGVCdWZmZXJMZW5ndGggKSB7XG4gICAgICB0aGlzLl9zcGVleF9yZXNhbXBsZXJfcHJvY2Vzc19pbnRlcmxlYXZlZF9mbG9hdCggdGhpcy5yZXNhbXBsZXIsIHRoaXMucmVzYW1wbGVCdWZmZXJQb2ludGVyLCB0aGlzLnJlc2FtcGxlU2FtcGxlc1BlckNoYW5uZWxQb2ludGVyLCB0aGlzLmVuY29kZXJCdWZmZXJQb2ludGVyLCB0aGlzLmVuY29kZXJTYW1wbGVzUGVyQ2hhbm5lbFBvaW50ZXIgKTtcbiAgICAgIHZhciBwYWNrZXRMZW5ndGggPSB0aGlzLl9vcHVzX2VuY29kZV9mbG9hdCggdGhpcy5lbmNvZGVyLCB0aGlzLmVuY29kZXJCdWZmZXJQb2ludGVyLCB0aGlzLmVuY29kZXJTYW1wbGVzUGVyQ2hhbm5lbCwgdGhpcy5lbmNvZGVyT3V0cHV0UG9pbnRlciwgdGhpcy5lbmNvZGVyT3V0cHV0TWF4TGVuZ3RoICk7XG4gICAgICB0aGlzLnNlZ21lbnRQYWNrZXQoIHBhY2tldExlbmd0aCApO1xuICAgICAgdGhpcy5yZXNhbXBsZUJ1ZmZlckluZGV4ID0gMDtcblxuICAgICAgdGhpcy5mcmFtZXNJblBhZ2UrKztcbiAgICAgIGlmICggdGhpcy5mcmFtZXNJblBhZ2UgPj0gdGhpcy5jb25maWcubWF4RnJhbWVzUGVyUGFnZSApIHtcbiAgICAgICAgdGhpcy5nZW5lcmF0ZVBhZ2UoKTtcbiAgICAgIH1cbiAgICB9XG4gIH1cbn07XG5cbk9nZ09wdXNFbmNvZGVyLnByb3RvdHlwZS5kZXN0cm95ID0gZnVuY3Rpb24oKSB7XG4gIGlmICggdGhpcy5lbmNvZGVyICkge1xuICAgIHRoaXMuX2ZyZWUodGhpcy5lbmNvZGVyU2FtcGxlc1BlckNoYW5uZWxQb2ludGVyKTtcbiAgICBkZWxldGUgdGhpcy5lbmNvZGVyU2FtcGxlc1BlckNoYW5uZWxQb2ludGVyO1xuICAgIHRoaXMuX2ZyZWUodGhpcy5lbmNvZGVyQnVmZmVyUG9pbnRlcik7XG4gICAgZGVsZXRlIHRoaXMuZW5jb2RlckJ1ZmZlclBvaW50ZXI7XG4gICAgdGhpcy5fZnJlZSh0aGlzLmVuY29kZXJPdXRwdXRQb2ludGVyKTtcbiAgICBkZWxldGUgdGhpcy5lbmNvZGVyT3V0cHV0UG9pbnRlcjtcbiAgICB0aGlzLl9mcmVlKHRoaXMucmVzYW1wbGVTYW1wbGVzUGVyQ2hhbm5lbFBvaW50ZXIpO1xuICAgIGRlbGV0ZSB0aGlzLnJlc2FtcGxlU2FtcGxlc1BlckNoYW5uZWxQb2ludGVyO1xuICAgIHRoaXMuX2ZyZWUodGhpcy5yZXNhbXBsZUJ1ZmZlclBvaW50ZXIpO1xuICAgIGRlbGV0ZSB0aGlzLnJlc2FtcGxlQnVmZmVyUG9pbnRlcjtcbiAgICB0aGlzLl9zcGVleF9yZXNhbXBsZXJfZGVzdHJveSh0aGlzLnJlc2FtcGxlcik7XG4gICAgZGVsZXRlIHRoaXMucmVzYW1wbGVyO1xuICAgIHRoaXMuX29wdXNfZW5jb2Rlcl9kZXN0cm95KHRoaXMuZW5jb2Rlcik7XG4gICAgZGVsZXRlIHRoaXMuZW5jb2RlcjtcbiAgfVxufTtcblxuT2dnT3B1c0VuY29kZXIucHJvdG90eXBlLmZsdXNoID0gZnVuY3Rpb24oKSB7XG4gIGlmICggdGhpcy5mcmFtZXNJblBhZ2UgKSB7XG4gICAgdGhpcy5nZW5lcmF0ZVBhZ2UoKTtcbiAgfVxuICAvLyBkaXNjYXJkIGFueSBwZW5kaW5nIGRhdGEgaW4gcmVzYW1wbGUgYnVmZmVyIChvbmx5IGEgZmV3IG1zIHdvcnRoKVxuICB0aGlzLnJlc2FtcGxlQnVmZmVySW5kZXggPSAwO1xuICBnbG9iYWxbJ3Bvc3RNZXNzYWdlJ10oIHttZXNzYWdlOiAnZmx1c2hlZCd9ICk7XG59O1xuXG5PZ2dPcHVzRW5jb2Rlci5wcm90b3R5cGUuZW5jb2RlRmluYWxGcmFtZSA9IGZ1bmN0aW9uKCkge1xuICBpZiAoIHRoaXMucmVzYW1wbGVCdWZmZXJJbmRleCA+IDAgKSB7XG4gICAgdmFyIGZpbmFsRnJhbWVCdWZmZXJzID0gW107XG4gICAgZm9yICggdmFyIGkgPSAwOyBpIDwgdGhpcy5jb25maWcubnVtYmVyT2ZDaGFubmVsczsgKytpICkge1xuICAgICAgZmluYWxGcmFtZUJ1ZmZlcnMucHVzaCggbmV3IEZsb2F0MzJBcnJheSggdGhpcy5jb25maWcuYnVmZmVyTGVuZ3RoIC0gKHRoaXMucmVzYW1wbGVCdWZmZXJJbmRleCAvIHRoaXMuY29uZmlnLm51bWJlck9mQ2hhbm5lbHMpICkpO1xuICAgIH1cbiAgICB0aGlzLmVuY29kZSggZmluYWxGcmFtZUJ1ZmZlcnMgKTtcbiAgfVxuICB0aGlzLmhlYWRlclR5cGUgKz0gNDtcbiAgdGhpcy5nZW5lcmF0ZVBhZ2UoKTtcbn07XG5cbk9nZ09wdXNFbmNvZGVyLnByb3RvdHlwZS5nZXRDaGVja3N1bSA9IGZ1bmN0aW9uKCBkYXRhICl7XG4gIHZhciBjaGVja3N1bSA9IDA7XG4gIGZvciAoIHZhciBpID0gMDsgaSA8IGRhdGEubGVuZ3RoOyBpKysgKSB7XG4gICAgY2hlY2tzdW0gPSAoY2hlY2tzdW0gPDwgOCkgXiB0aGlzLmNoZWNrc3VtVGFibGVbICgoY2hlY2tzdW0+Pj4yNCkgJiAweGZmKSBeIGRhdGFbaV0gXTtcbiAgfVxuICByZXR1cm4gY2hlY2tzdW0gPj4+IDA7XG59O1xuXG5PZ2dPcHVzRW5jb2Rlci5wcm90b3R5cGUuZ2VuZXJhdGVDb21tZW50UGFnZSA9IGZ1bmN0aW9uKCl7XG4gIHZhciBzZWdtZW50RGF0YVZpZXcgPSBuZXcgRGF0YVZpZXcoIHRoaXMuc2VnbWVudERhdGEuYnVmZmVyICk7XG4gIHNlZ21lbnREYXRhVmlldy5zZXRVaW50MzIoIDAsIDE5MzcwNzYzMDMsIHRydWUgKSAvLyBNYWdpYyBTaWduYXR1cmUgJ09wdXMnXG4gIHNlZ21lbnREYXRhVmlldy5zZXRVaW50MzIoIDQsIDE5MzYxNTQ5NjQsIHRydWUgKSAvLyBNYWdpYyBTaWduYXR1cmUgJ1RhZ3MnXG4gIHNlZ21lbnREYXRhVmlldy5zZXRVaW50MzIoIDgsIDEwLCB0cnVlICk7IC8vIFZlbmRvciBMZW5ndGhcbiAgc2VnbWVudERhdGFWaWV3LnNldFVpbnQzMiggMTIsIDE4Njg3ODQ5NzgsIHRydWUgKTsgLy8gVmVuZG9yIG5hbWUgJ1JlY28nXG4gIHNlZ21lbnREYXRhVmlldy5zZXRVaW50MzIoIDE2LCAxOTE5MjQ3NDc0LCB0cnVlICk7IC8vIFZlbmRvciBuYW1lICdyZGVyJ1xuICBzZWdtZW50RGF0YVZpZXcuc2V0VWludDE2KCAyMCwgMjEzMjIsIHRydWUgKTsgLy8gVmVuZG9yIG5hbWUgJ0pTJ1xuICBzZWdtZW50RGF0YVZpZXcuc2V0VWludDMyKCAyMiwgMCwgdHJ1ZSApOyAvLyBVc2VyIENvbW1lbnQgTGlzdCBMZW5ndGhcbiAgdGhpcy5zZWdtZW50VGFibGVJbmRleCA9IDE7XG4gIHRoaXMuc2VnbWVudERhdGFJbmRleCA9IHRoaXMuc2VnbWVudFRhYmxlWzBdID0gMjY7XG4gIHRoaXMuaGVhZGVyVHlwZSA9IDA7XG4gIHRoaXMuZ2VuZXJhdGVQYWdlKCk7XG59O1xuXG5PZ2dPcHVzRW5jb2Rlci5wcm90b3R5cGUuZ2VuZXJhdGVJZFBhZ2UgPSBmdW5jdGlvbigpe1xuICB2YXIgc2VnbWVudERhdGFWaWV3ID0gbmV3IERhdGFWaWV3KCB0aGlzLnNlZ21lbnREYXRhLmJ1ZmZlciApO1xuICBzZWdtZW50RGF0YVZpZXcuc2V0VWludDMyKCAwLCAxOTM3MDc2MzAzLCB0cnVlICkgLy8gTWFnaWMgU2lnbmF0dXJlICdPcHVzJ1xuICBzZWdtZW50RGF0YVZpZXcuc2V0VWludDMyKCA0LCAxNjg0MTA0NTIwLCB0cnVlICkgLy8gTWFnaWMgU2lnbmF0dXJlICdIZWFkJ1xuICBzZWdtZW50RGF0YVZpZXcuc2V0VWludDgoIDgsIDEsIHRydWUgKTsgLy8gVmVyc2lvblxuICBzZWdtZW50RGF0YVZpZXcuc2V0VWludDgoIDksIHRoaXMuY29uZmlnLm51bWJlck9mQ2hhbm5lbHMsIHRydWUgKTsgLy8gQ2hhbm5lbCBjb3VudFxuICBzZWdtZW50RGF0YVZpZXcuc2V0VWludDE2KCAxMCwgMzg0MCwgdHJ1ZSApOyAvLyBwcmUtc2tpcCAoODBtcylcbiAgc2VnbWVudERhdGFWaWV3LnNldFVpbnQzMiggMTIsIHRoaXMuY29uZmlnLm9yaWdpbmFsU2FtcGxlUmF0ZU92ZXJyaWRlIHx8IHRoaXMuY29uZmlnLm9yaWdpbmFsU2FtcGxlUmF0ZSwgdHJ1ZSApOyAvLyBvcmlnaW5hbCBzYW1wbGUgcmF0ZVxuICBzZWdtZW50RGF0YVZpZXcuc2V0VWludDE2KCAxNiwgMCwgdHJ1ZSApOyAvLyBvdXRwdXQgZ2FpblxuICBzZWdtZW50RGF0YVZpZXcuc2V0VWludDgoIDE4LCAwLCB0cnVlICk7IC8vIGNoYW5uZWwgbWFwIDAgPSBtb25vIG9yIHN0ZXJlb1xuICB0aGlzLnNlZ21lbnRUYWJsZUluZGV4ID0gMTtcbiAgdGhpcy5zZWdtZW50RGF0YUluZGV4ID0gdGhpcy5zZWdtZW50VGFibGVbMF0gPSAxOTtcbiAgdGhpcy5oZWFkZXJUeXBlID0gMjtcbiAgdGhpcy5nZW5lcmF0ZVBhZ2UoKTtcbn07XG5cbk9nZ09wdXNFbmNvZGVyLnByb3RvdHlwZS5nZW5lcmF0ZVBhZ2UgPSBmdW5jdGlvbigpe1xuICB2YXIgZ3JhbnVsZVBvc2l0aW9uID0gKCB0aGlzLmxhc3RQb3NpdGl2ZUdyYW51bGVQb3NpdGlvbiA9PT0gdGhpcy5ncmFudWxlUG9zaXRpb24pID8gLTEgOiB0aGlzLmdyYW51bGVQb3NpdGlvbjtcbiAgdmFyIHBhZ2VCdWZmZXIgPSBuZXcgQXJyYXlCdWZmZXIoICAyNyArIHRoaXMuc2VnbWVudFRhYmxlSW5kZXggKyB0aGlzLnNlZ21lbnREYXRhSW5kZXggKTtcbiAgdmFyIHBhZ2VCdWZmZXJWaWV3ID0gbmV3IERhdGFWaWV3KCBwYWdlQnVmZmVyICk7XG4gIHZhciBwYWdlID0gbmV3IFVpbnQ4QXJyYXkoIHBhZ2VCdWZmZXIgKTtcblxuICBwYWdlQnVmZmVyVmlldy5zZXRVaW50MzIoIDAsIDEzOTkyODU1ODMsIHRydWUpOyAvLyBDYXB0dXJlIFBhdHRlcm4gc3RhcnRzIGFsbCBwYWdlIGhlYWRlcnMgJ09nZ1MnXG4gIHBhZ2VCdWZmZXJWaWV3LnNldFVpbnQ4KCA0LCAwLCB0cnVlICk7IC8vIFZlcnNpb25cbiAgcGFnZUJ1ZmZlclZpZXcuc2V0VWludDgoIDUsIHRoaXMuaGVhZGVyVHlwZSwgdHJ1ZSApOyAvLyAxID0gY29udGludWF0aW9uLCAyID0gYmVnaW5uaW5nIG9mIHN0cmVhbSwgNCA9IGVuZCBvZiBzdHJlYW1cblxuICAvLyBOdW1iZXIgb2Ygc2FtcGxlcyB1cHRvIGFuZCBpbmNsdWRpbmcgdGhpcyBwYWdlIGF0IDQ4MDAwSHosIGludG8gc2lnbmVkIDY0IGJpdCBMaXR0bGUgRW5kaWFuIGludGVnZXJcbiAgLy8gSmF2YXNjcmlwdCBOdW1iZXIgbWF4aW11bSB2YWx1ZSBpcyA1MyBiaXRzIG9yIDJeNTMgLSAxIFxuICBwYWdlQnVmZmVyVmlldy5zZXRVaW50MzIoIDYsIGdyYW51bGVQb3NpdGlvbiwgdHJ1ZSApO1xuICBpZiAoZ3JhbnVsZVBvc2l0aW9uIDwgMCkge1xuICAgIHBhZ2VCdWZmZXJWaWV3LnNldEludDMyKCAxMCwgTWF0aC5jZWlsKGdyYW51bGVQb3NpdGlvbi80Mjk0OTY3Mjk3KSAtIDEsIHRydWUgKTtcbiAgfVxuICBlbHNlIHtcbiAgICBwYWdlQnVmZmVyVmlldy5zZXRJbnQzMiggMTAsIE1hdGguZmxvb3IoZ3JhbnVsZVBvc2l0aW9uLzQyOTQ5NjcyOTYpLCB0cnVlICk7XG4gIH1cblxuICBwYWdlQnVmZmVyVmlldy5zZXRVaW50MzIoIDE0LCB0aGlzLmNvbmZpZy5zZXJpYWwsIHRydWUgKTsgLy8gQml0c3RyZWFtIHNlcmlhbCBudW1iZXJcbiAgcGFnZUJ1ZmZlclZpZXcuc2V0VWludDMyKCAxOCwgdGhpcy5wYWdlSW5kZXgrKywgdHJ1ZSApOyAvLyBQYWdlIHNlcXVlbmNlIG51bWJlclxuICBwYWdlQnVmZmVyVmlldy5zZXRVaW50OCggMjYsIHRoaXMuc2VnbWVudFRhYmxlSW5kZXgsIHRydWUgKTsgLy8gTnVtYmVyIG9mIHNlZ21lbnRzIGluIHBhZ2UuXG4gIHBhZ2Uuc2V0KCB0aGlzLnNlZ21lbnRUYWJsZS5zdWJhcnJheSgwLCB0aGlzLnNlZ21lbnRUYWJsZUluZGV4KSwgMjcgKTsgLy8gU2VnbWVudCBUYWJsZVxuICBwYWdlLnNldCggdGhpcy5zZWdtZW50RGF0YS5zdWJhcnJheSgwLCB0aGlzLnNlZ21lbnREYXRhSW5kZXgpLCAyNyArIHRoaXMuc2VnbWVudFRhYmxlSW5kZXggKTsgLy8gU2VnbWVudCBEYXRhXG4gIHBhZ2VCdWZmZXJWaWV3LnNldFVpbnQzMiggMjIsIHRoaXMuZ2V0Q2hlY2tzdW0oIHBhZ2UgKSwgdHJ1ZSApOyAvLyBDaGVja3N1bVxuXG4gIGdsb2JhbFsncG9zdE1lc3NhZ2UnXSgge21lc3NhZ2U6ICdwYWdlJywgcGFnZTogcGFnZSwgc2FtcGxlUG9zaXRpb246IHRoaXMuZ3JhbnVsZVBvc2l0aW9ufSwgW3BhZ2UuYnVmZmVyXSApO1xuICB0aGlzLnNlZ21lbnRUYWJsZUluZGV4ID0gMDtcbiAgdGhpcy5zZWdtZW50RGF0YUluZGV4ID0gMDtcbiAgdGhpcy5mcmFtZXNJblBhZ2UgPSAwO1xuICBpZiAoIGdyYW51bGVQb3NpdGlvbiA+IDAgKSB7XG4gICAgdGhpcy5sYXN0UG9zaXRpdmVHcmFudWxlUG9zaXRpb24gPSBncmFudWxlUG9zaXRpb247XG4gIH1cbn07XG5cbk9nZ09wdXNFbmNvZGVyLnByb3RvdHlwZS5pbml0Q2hlY2tzdW1UYWJsZSA9IGZ1bmN0aW9uKCl7XG4gIHRoaXMuY2hlY2tzdW1UYWJsZSA9IFtdO1xuICBmb3IgKCB2YXIgaSA9IDA7IGkgPCAyNTY7IGkrKyApIHtcbiAgICB2YXIgciA9IGkgPDwgMjQ7XG4gICAgZm9yICggdmFyIGogPSAwOyBqIDwgODsgaisrICkge1xuICAgICAgciA9ICgociAmIDB4ODAwMDAwMDApICE9IDApID8gKChyIDw8IDEpIF4gMHgwNGMxMWRiNykgOiAociA8PCAxKTtcbiAgICB9XG4gICAgdGhpcy5jaGVja3N1bVRhYmxlW2ldID0gKHIgJiAweGZmZmZmZmZmKTtcbiAgfVxufTtcblxuT2dnT3B1c0VuY29kZXIucHJvdG90eXBlLnNldE9wdXNDb250cm9sID0gZnVuY3Rpb24oIGNvbnRyb2wsIHZhbHVlICl7XG4gIHZhciBsb2NhdGlvbiA9IHRoaXMuX21hbGxvYyggNCApO1xuICB0aGlzLkhFQVAzMlsgbG9jYXRpb24gPj4gMiBdID0gdmFsdWU7XG4gIHRoaXMuX29wdXNfZW5jb2Rlcl9jdGwoIHRoaXMuZW5jb2RlciwgY29udHJvbCwgbG9jYXRpb24gKTtcbiAgdGhpcy5fZnJlZSggbG9jYXRpb24gKTtcbn07XG5cbk9nZ09wdXNFbmNvZGVyLnByb3RvdHlwZS5pbml0Q29kZWMgPSBmdW5jdGlvbigpIHtcbiAgdmFyIGVyckxvY2F0aW9uID0gdGhpcy5fbWFsbG9jKCA0ICk7XG4gIHRoaXMuZW5jb2RlciA9IHRoaXMuX29wdXNfZW5jb2Rlcl9jcmVhdGUoIHRoaXMuY29uZmlnLmVuY29kZXJTYW1wbGVSYXRlLCB0aGlzLmNvbmZpZy5udW1iZXJPZkNoYW5uZWxzLCB0aGlzLmNvbmZpZy5lbmNvZGVyQXBwbGljYXRpb24sIGVyckxvY2F0aW9uICk7XG4gIHRoaXMuX2ZyZWUoIGVyckxvY2F0aW9uICk7XG5cbiAgaWYgKCB0aGlzLmNvbmZpZy5lbmNvZGVyQml0UmF0ZSApIHtcbiAgICB0aGlzLnNldE9wdXNDb250cm9sKCA0MDAyLCB0aGlzLmNvbmZpZy5lbmNvZGVyQml0UmF0ZSApO1xuICB9XG5cbiAgaWYgKCB0aGlzLmNvbmZpZy5lbmNvZGVyQ29tcGxleGl0eSApIHtcbiAgICB0aGlzLnNldE9wdXNDb250cm9sKCA0MDEwLCB0aGlzLmNvbmZpZy5lbmNvZGVyQ29tcGxleGl0eSApO1xuICB9XG5cbiAgdGhpcy5lbmNvZGVyU2FtcGxlc1BlckNoYW5uZWwgPSB0aGlzLmNvbmZpZy5lbmNvZGVyU2FtcGxlUmF0ZSAqIHRoaXMuY29uZmlnLmVuY29kZXJGcmFtZVNpemUgLyAxMDAwO1xuICB0aGlzLmVuY29kZXJTYW1wbGVzUGVyQ2hhbm5lbFBvaW50ZXIgPSB0aGlzLl9tYWxsb2MoIDQgKTtcbiAgdGhpcy5IRUFQMzJbIHRoaXMuZW5jb2RlclNhbXBsZXNQZXJDaGFubmVsUG9pbnRlciA+PiAyIF0gPSB0aGlzLmVuY29kZXJTYW1wbGVzUGVyQ2hhbm5lbDtcblxuICB0aGlzLmVuY29kZXJCdWZmZXJMZW5ndGggPSB0aGlzLmVuY29kZXJTYW1wbGVzUGVyQ2hhbm5lbCAqIHRoaXMuY29uZmlnLm51bWJlck9mQ2hhbm5lbHM7XG4gIHRoaXMuZW5jb2RlckJ1ZmZlclBvaW50ZXIgPSB0aGlzLl9tYWxsb2MoIHRoaXMuZW5jb2RlckJ1ZmZlckxlbmd0aCAqIDQgKTsgLy8gNCBieXRlcyBwZXIgc2FtcGxlXG4gIHRoaXMuZW5jb2RlckJ1ZmZlciA9IHRoaXMuSEVBUEYzMi5zdWJhcnJheSggdGhpcy5lbmNvZGVyQnVmZmVyUG9pbnRlciA+PiAyLCAodGhpcy5lbmNvZGVyQnVmZmVyUG9pbnRlciA+PiAyKSArIHRoaXMuZW5jb2RlckJ1ZmZlckxlbmd0aCApO1xuXG4gIHRoaXMuZW5jb2Rlck91dHB1dE1heExlbmd0aCA9IDQwMDA7XG4gIHRoaXMuZW5jb2Rlck91dHB1dFBvaW50ZXIgPSB0aGlzLl9tYWxsb2MoIHRoaXMuZW5jb2Rlck91dHB1dE1heExlbmd0aCApO1xuICB0aGlzLmVuY29kZXJPdXRwdXRCdWZmZXIgPSB0aGlzLkhFQVBVOC5zdWJhcnJheSggdGhpcy5lbmNvZGVyT3V0cHV0UG9pbnRlciwgdGhpcy5lbmNvZGVyT3V0cHV0UG9pbnRlciArIHRoaXMuZW5jb2Rlck91dHB1dE1heExlbmd0aCApO1xufTtcblxuT2dnT3B1c0VuY29kZXIucHJvdG90eXBlLmluaXRSZXNhbXBsZXIgPSBmdW5jdGlvbigpIHtcbiAgdmFyIGVyckxvY2F0aW9uID0gdGhpcy5fbWFsbG9jKCA0ICk7XG4gIHRoaXMucmVzYW1wbGVyID0gdGhpcy5fc3BlZXhfcmVzYW1wbGVyX2luaXQoIHRoaXMuY29uZmlnLm51bWJlck9mQ2hhbm5lbHMsIHRoaXMuY29uZmlnLm9yaWdpbmFsU2FtcGxlUmF0ZSwgdGhpcy5jb25maWcuZW5jb2RlclNhbXBsZVJhdGUsIHRoaXMuY29uZmlnLnJlc2FtcGxlUXVhbGl0eSwgZXJyTG9jYXRpb24gKTtcbiAgdGhpcy5fZnJlZSggZXJyTG9jYXRpb24gKTtcblxuICB0aGlzLnJlc2FtcGxlQnVmZmVySW5kZXggPSAwO1xuICB0aGlzLnJlc2FtcGxlU2FtcGxlc1BlckNoYW5uZWwgPSB0aGlzLmNvbmZpZy5vcmlnaW5hbFNhbXBsZVJhdGUgKiB0aGlzLmNvbmZpZy5lbmNvZGVyRnJhbWVTaXplIC8gMTAwMDtcbiAgdGhpcy5yZXNhbXBsZVNhbXBsZXNQZXJDaGFubmVsUG9pbnRlciA9IHRoaXMuX21hbGxvYyggNCApO1xuICB0aGlzLkhFQVAzMlsgdGhpcy5yZXNhbXBsZVNhbXBsZXNQZXJDaGFubmVsUG9pbnRlciA+PiAyIF0gPSB0aGlzLnJlc2FtcGxlU2FtcGxlc1BlckNoYW5uZWw7XG5cbiAgdGhpcy5yZXNhbXBsZUJ1ZmZlckxlbmd0aCA9IHRoaXMucmVzYW1wbGVTYW1wbGVzUGVyQ2hhbm5lbCAqIHRoaXMuY29uZmlnLm51bWJlck9mQ2hhbm5lbHM7XG4gIHRoaXMucmVzYW1wbGVCdWZmZXJQb2ludGVyID0gdGhpcy5fbWFsbG9jKCB0aGlzLnJlc2FtcGxlQnVmZmVyTGVuZ3RoICogNCApOyAvLyA0IGJ5dGVzIHBlciBzYW1wbGVcbiAgdGhpcy5yZXNhbXBsZUJ1ZmZlciA9IHRoaXMuSEVBUEYzMi5zdWJhcnJheSggdGhpcy5yZXNhbXBsZUJ1ZmZlclBvaW50ZXIgPj4gMiwgKHRoaXMucmVzYW1wbGVCdWZmZXJQb2ludGVyID4+IDIpICsgdGhpcy5yZXNhbXBsZUJ1ZmZlckxlbmd0aCApO1xufTtcblxuT2dnT3B1c0VuY29kZXIucHJvdG90eXBlLmludGVybGVhdmUgPSBmdW5jdGlvbiggYnVmZmVycyApIHtcbiAgZm9yICggdmFyIGkgPSAwOyBpIDwgdGhpcy5jb25maWcuYnVmZmVyTGVuZ3RoOyBpKysgKSB7XG4gICAgZm9yICggdmFyIGNoYW5uZWwgPSAwOyBjaGFubmVsIDwgdGhpcy5jb25maWcubnVtYmVyT2ZDaGFubmVsczsgY2hhbm5lbCsrICkge1xuICAgICAgdGhpcy5pbnRlcmxlYXZlZEJ1ZmZlcnNbIGkgKiB0aGlzLmNvbmZpZy5udW1iZXJPZkNoYW5uZWxzICsgY2hhbm5lbCBdID0gYnVmZmVyc1sgY2hhbm5lbCBdWyBpIF07XG4gICAgfVxuICB9XG5cbiAgcmV0dXJuIHRoaXMuaW50ZXJsZWF2ZWRCdWZmZXJzO1xufTtcblxuT2dnT3B1c0VuY29kZXIucHJvdG90eXBlLnNlZ21lbnRQYWNrZXQgPSBmdW5jdGlvbiggcGFja2V0TGVuZ3RoICkge1xuICB2YXIgcGFja2V0SW5kZXggPSAwO1xuXG4gIHdoaWxlICggcGFja2V0TGVuZ3RoID49IDAgKSB7XG5cbiAgICBpZiAoIHRoaXMuc2VnbWVudFRhYmxlSW5kZXggPT09IDI1NSApIHtcbiAgICAgIHRoaXMuZ2VuZXJhdGVQYWdlKCk7XG4gICAgICB0aGlzLmhlYWRlclR5cGUgPSAxO1xuICAgIH1cblxuICAgIHZhciBzZWdtZW50TGVuZ3RoID0gTWF0aC5taW4oIHBhY2tldExlbmd0aCwgMjU1ICk7XG4gICAgdGhpcy5zZWdtZW50VGFibGVbIHRoaXMuc2VnbWVudFRhYmxlSW5kZXgrKyBdID0gc2VnbWVudExlbmd0aDtcbiAgICB2YXIgc2VnbWVudCA9IHRoaXMuZW5jb2Rlck91dHB1dEJ1ZmZlci5zdWJhcnJheSggcGFja2V0SW5kZXgsIHBhY2tldEluZGV4ICsgc2VnbWVudExlbmd0aCApO1xuXG4gICAgaWYgKCB0aGlzLmNvbmZpZy5zdHJlYW1PcHVzUGFja2V0cyApIHtcbiAgICAgIGlmICggIXRoaXMuY29uZmlnLmNhY2hlRnJhbWVGb3JDYWxsYmFjayApIHtcbiAgICAgICAgZ2xvYmFsWydwb3N0TWVzc2FnZSddKHsgdHlwZTogJ29wdXMnLCBkYXRhOiBzZWdtZW50IH0pO1xuICAgICAgfSBlbHNlIGlmICggKyt0aGlzLmZyYW1lc0luQ2FsbGJhY2sgPT09IDIgKSB7XG4gICAgICAgIHZhciBjYWNoZWRTZWdtZW50TGVuZ3RoID0gdGhpcy5zZWdtZW50VGFibGVbIHRoaXMuc2VnbWVudFRhYmxlSW5kZXggLSAyIF07XG4gICAgICAgIHZhciBjYWNoZWRTZWdtZW50ID0gdGhpcy5zZWdtZW50RGF0YS5zdWJhcnJheSggdGhpcy5zZWdtZW50RGF0YUluZGV4IC0gY2FjaGVkU2VnbWVudExlbmd0aCwgdGhpcy5zZWdtZW50RGF0YUluZGV4ICk7XG5cbiAgICAgICAgZ2xvYmFsWydwb3N0TWVzc2FnZSddKHsgdHlwZTogJ29wdXMnLCBkYXRhOiBbIGNhY2hlZFNlZ21lbnQsIHNlZ21lbnQgXSB9KTtcbiAgICAgICAgdGhpcy5mcmFtZXNJbkNhbGxiYWNrID0gMDtcbiAgICAgIH1cbiAgICB9XG5cbiAgICB0aGlzLnNlZ21lbnREYXRhLnNldCggc2VnbWVudCwgdGhpcy5zZWdtZW50RGF0YUluZGV4ICk7XG4gICAgdGhpcy5zZWdtZW50RGF0YUluZGV4ICs9IHNlZ21lbnRMZW5ndGg7XG4gICAgcGFja2V0SW5kZXggKz0gc2VnbWVudExlbmd0aDtcbiAgICBwYWNrZXRMZW5ndGggLT0gMjU1O1xuICB9XG5cbiAgdGhpcy5ncmFudWxlUG9zaXRpb24gKz0gKCA0OCAqIHRoaXMuY29uZmlnLmVuY29kZXJGcmFtZVNpemUgKTtcbiAgaWYgKCB0aGlzLnNlZ21lbnRUYWJsZUluZGV4ID09PSAyNTUgKSB7XG4gICAgdGhpcy5nZW5lcmF0ZVBhZ2UoKTtcbiAgICB0aGlzLmhlYWRlclR5cGUgPSAwO1xuICB9XG59O1xuXG5cbmlmICghTW9kdWxlKSB7XG4gIE1vZHVsZSA9IHt9O1xufVxuXG5Nb2R1bGVbJ21haW5SZWFkeSddID0gbWFpblJlYWR5O1xuTW9kdWxlWydPZ2dPcHVzRW5jb2RlciddID0gT2dnT3B1c0VuY29kZXI7XG5Nb2R1bGVbJ29uUnVudGltZUluaXRpYWxpemVkJ10gPSBtYWluUmVhZHlSZXNvbHZlO1xuXG5tb2R1bGUuZXhwb3J0cyA9IE1vZHVsZTtcbiJdLCJtYXBwaW5ncyI6IkFBQUE7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7O0EiLCJzb3VyY2VSb290IjoiIn0=\n//# sourceURL=webpack-internal:///./src/encoderWorker.js\n");
+eval("/* WEBPACK VAR INJECTION */(function(global) {\n\nvar encoder;\nvar mainReadyResolve;\nvar mainReady = new Promise(function(resolve){ mainReadyResolve = resolve; });\n\nglobal['onmessage'] = function( e ){\n  mainReady.then(function(){\n    switch( e['data']['command'] ){\n\n      case 'encode':\n        if (encoder){\n          encoder.encode( e['data']['buffers'] );\n        }\n        break;\n\n      case 'getHeaderPages':\n        if (encoder){\n          encoder.generateIdPage();\n          encoder.generateCommentPage();\n        }\n        break;\n\n      case 'done':\n        if (encoder) {\n          encoder.encodeFinalFrame();\n          global['postMessage']( {message: 'done'} );\n        }\n        break;\n\n      case 'close':\n        global['postMessage']( {message: 'close'} );\n        global['close']();\n        break;\n\n      case 'flush':\n        if (encoder) {\n          encoder.flush();\n        }\n        break;\n\n      case 'destroy':\n        if (encoder) {\n          encoder.destroy();\n        }\n        break;\n\n      case 'init':\n        if ( encoder ) {\n          encoder.destroy();\n        }\n        encoder = new OggOpusEncoder( e['data'], Module );\n        global['postMessage']( {message: 'ready'} );\n        break;\n\n      default:\n        // Ignore any unknown commands and continue receiving commands\n    }\n  });\n};\n\n\nvar OggOpusEncoder = function( config, Module ){\n\n  if ( !Module ) {\n    throw new Error('Module with exports required to initialize an encoder instance');\n  }\n\n  this.config = Object.assign({\n    bufferLength: 4096, // Define size of incoming buffer\n    encoderApplication: 2049, // 2048 = Voice (Lower fidelity)\n                              // 2049 = Full Band Audio (Highest fidelity)\n                              // 2051 = Restricted Low Delay (Lowest latency)\n    encoderFrameSize: 20, // Specified in ms.\n    encoderSampleRate: 48000, // Desired encoding sample rate. Audio will be resampled\n    maxFramesPerPage: 40, // Tradeoff latency with overhead\n    numberOfChannels: 1,\n    originalSampleRate: 44100,\n    resampleQuality: 3, // Value between 0 and 10 inclusive. 10 being highest quality.\n    serial: Math.floor(Math.random() * 4294967296),\n    streamOpusPackets: false\n  }, config );\n\n  this._opus_encoder_create = Module._opus_encoder_create;\n  this._opus_encoder_destroy = Module._opus_encoder_destroy;\n  this._opus_encoder_ctl = Module._opus_encoder_ctl;\n  this._speex_resampler_process_interleaved_float = Module._speex_resampler_process_interleaved_float;\n  this._speex_resampler_init = Module._speex_resampler_init;\n  this._speex_resampler_destroy = Module._speex_resampler_destroy;\n  this._opus_encode_float = Module._opus_encode_float;\n  this._free = Module._free;\n  this._malloc = Module._malloc;\n  this.HEAPU8 = Module.HEAPU8;\n  this.HEAP32 = Module.HEAP32;\n  this.HEAPF32 = Module.HEAPF32;\n\n  this.pageIndex = 0;\n  this.granulePosition = 0;\n  this.segmentData = new Uint8Array( 65025 ); // Maximum length of oggOpus data\n  this.segmentDataIndex = 0;\n  this.segmentTable = new Uint8Array( 255 ); // Maximum data segments\n  this.segmentTableIndex = 0;\n  this.framesInPage = 0;\n\n  this.initChecksumTable();\n  this.initCodec();\n  this.initResampler();\n\n  if ( this.config.numberOfChannels === 1 ) {\n    this.interleave = function( buffers ) { return buffers[0]; };\n  }\n  else {\n    this.interleavedBuffers = new Float32Array( this.config.bufferLength * this.config.numberOfChannels );\n  }\n\n};\n\nOggOpusEncoder.prototype.encode = function( buffers ) {\n  var samples = this.interleave( buffers );\n  var sampleIndex = 0;\n\n  while ( sampleIndex < samples.length ) {\n\n    var lengthToCopy = Math.min( this.resampleBufferLength - this.resampleBufferIndex, samples.length - sampleIndex );\n    this.resampleBuffer.set( samples.subarray( sampleIndex, sampleIndex+lengthToCopy ), this.resampleBufferIndex );\n    sampleIndex += lengthToCopy;\n    this.resampleBufferIndex += lengthToCopy;\n\n    if ( this.resampleBufferIndex === this.resampleBufferLength ) {\n      this._speex_resampler_process_interleaved_float( this.resampler, this.resampleBufferPointer, this.resampleSamplesPerChannelPointer, this.encoderBufferPointer, this.encoderSamplesPerChannelPointer );\n      var packetLength = this._opus_encode_float( this.encoder, this.encoderBufferPointer, this.encoderSamplesPerChannel, this.encoderOutputPointer, this.encoderOutputMaxLength );\n      this.segmentPacket( packetLength );\n      this.resampleBufferIndex = 0;\n\n      this.framesInPage++;\n      if ( this.framesInPage >= this.config.maxFramesPerPage ) {\n        this.generatePage();\n      }\n    }\n  }\n};\n\nOggOpusEncoder.prototype.destroy = function() {\n  if ( this.encoder ) {\n    this._free(this.encoderSamplesPerChannelPointer);\n    delete this.encoderSamplesPerChannelPointer;\n    this._free(this.encoderBufferPointer);\n    delete this.encoderBufferPointer;\n    this._free(this.encoderOutputPointer);\n    delete this.encoderOutputPointer;\n    this._free(this.resampleSamplesPerChannelPointer);\n    delete this.resampleSamplesPerChannelPointer;\n    this._free(this.resampleBufferPointer);\n    delete this.resampleBufferPointer;\n    this._speex_resampler_destroy(this.resampler);\n    delete this.resampler;\n    this._opus_encoder_destroy(this.encoder);\n    delete this.encoder;\n  }\n};\n\nOggOpusEncoder.prototype.flush = function() {\n  if ( this.framesInPage ) {\n    this.generatePage();\n  }\n  // discard any pending data in resample buffer (only a few ms worth)\n  this.resampleBufferIndex = 0;\n  global['postMessage']( {message: 'flushed'} );\n};\n\nOggOpusEncoder.prototype.encodeFinalFrame = function() {\n  if ( this.resampleBufferIndex > 0 ) {\n    var finalFrameBuffers = [];\n    for ( var i = 0; i < this.config.numberOfChannels; ++i ) {\n      finalFrameBuffers.push( new Float32Array( this.config.bufferLength - (this.resampleBufferIndex / this.config.numberOfChannels) ));\n    }\n    this.encode( finalFrameBuffers );\n  }\n  this.headerType += 4;\n  this.generatePage();\n};\n\nOggOpusEncoder.prototype.getChecksum = function( data ){\n  var checksum = 0;\n  for ( var i = 0; i < data.length; i++ ) {\n    checksum = (checksum << 8) ^ this.checksumTable[ ((checksum>>>24) & 0xff) ^ data[i] ];\n  }\n  return checksum >>> 0;\n};\n\nOggOpusEncoder.prototype.generateCommentPage = function(){\n  if ( this.config.streamOpusPackets ) { return; }\n  var segmentDataView = new DataView( this.segmentData.buffer );\n  segmentDataView.setUint32( 0, 1937076303, true ) // Magic Signature 'Opus'\n  segmentDataView.setUint32( 4, 1936154964, true ) // Magic Signature 'Tags'\n  segmentDataView.setUint32( 8, 10, true ); // Vendor Length\n  segmentDataView.setUint32( 12, 1868784978, true ); // Vendor name 'Reco'\n  segmentDataView.setUint32( 16, 1919247474, true ); // Vendor name 'rder'\n  segmentDataView.setUint16( 20, 21322, true ); // Vendor name 'JS'\n  segmentDataView.setUint32( 22, 0, true ); // User Comment List Length\n  this.segmentTableIndex = 1;\n  this.segmentDataIndex = this.segmentTable[0] = 26;\n  this.headerType = 0;\n  this.generatePage();\n};\n\nOggOpusEncoder.prototype.generateIdPage = function(){\n  if ( this.config.streamOpusPackets ) { return; }\n  var segmentDataView = new DataView( this.segmentData.buffer );\n  segmentDataView.setUint32( 0, 1937076303, true ) // Magic Signature 'Opus'\n  segmentDataView.setUint32( 4, 1684104520, true ) // Magic Signature 'Head'\n  segmentDataView.setUint8( 8, 1, true ); // Version\n  segmentDataView.setUint8( 9, this.config.numberOfChannels, true ); // Channel count\n  segmentDataView.setUint16( 10, 3840, true ); // pre-skip (80ms)\n  segmentDataView.setUint32( 12, this.config.originalSampleRateOverride || this.config.originalSampleRate, true ); // original sample rate\n  segmentDataView.setUint16( 16, 0, true ); // output gain\n  segmentDataView.setUint8( 18, 0, true ); // channel map 0 = mono or stereo\n  this.segmentTableIndex = 1;\n  this.segmentDataIndex = this.segmentTable[0] = 19;\n  this.headerType = 2;\n  this.generatePage();\n};\n\nOggOpusEncoder.prototype.generatePage = function(){\n  if ( this.config.streamOpusPackets ) { return; }\n  var granulePosition = ( this.lastPositiveGranulePosition === this.granulePosition) ? -1 : this.granulePosition;\n  var pageBuffer = new ArrayBuffer(  27 + this.segmentTableIndex + this.segmentDataIndex );\n  var pageBufferView = new DataView( pageBuffer );\n  var page = new Uint8Array( pageBuffer );\n\n  pageBufferView.setUint32( 0, 1399285583, true); // Capture Pattern starts all page headers 'OggS'\n  pageBufferView.setUint8( 4, 0, true ); // Version\n  pageBufferView.setUint8( 5, this.headerType, true ); // 1 = continuation, 2 = beginning of stream, 4 = end of stream\n\n  // Number of samples upto and including this page at 48000Hz, into signed 64 bit Little Endian integer\n  // Javascript Number maximum value is 53 bits or 2^53 - 1\n  pageBufferView.setUint32( 6, granulePosition, true );\n  if (granulePosition < 0) {\n    pageBufferView.setInt32( 10, Math.ceil(granulePosition/4294967297) - 1, true );\n  }\n  else {\n    pageBufferView.setInt32( 10, Math.floor(granulePosition/4294967296), true );\n  }\n\n  pageBufferView.setUint32( 14, this.config.serial, true ); // Bitstream serial number\n  pageBufferView.setUint32( 18, this.pageIndex++, true ); // Page sequence number\n  pageBufferView.setUint8( 26, this.segmentTableIndex, true ); // Number of segments in page.\n  page.set( this.segmentTable.subarray(0, this.segmentTableIndex), 27 ); // Segment Table\n  page.set( this.segmentData.subarray(0, this.segmentDataIndex), 27 + this.segmentTableIndex ); // Segment Data\n  pageBufferView.setUint32( 22, this.getChecksum( page ), true ); // Checksum\n\n  global['postMessage']( {message: 'page', page: page, samplePosition: this.granulePosition}, [page.buffer] );\n  this.segmentTableIndex = 0;\n  this.segmentDataIndex = 0;\n  this.framesInPage = 0;\n  if ( granulePosition > 0 ) {\n    this.lastPositiveGranulePosition = granulePosition;\n  }\n};\n\nOggOpusEncoder.prototype.initChecksumTable = function(){\n  this.checksumTable = [];\n  for ( var i = 0; i < 256; i++ ) {\n    var r = i << 24;\n    for ( var j = 0; j < 8; j++ ) {\n      r = ((r & 0x80000000) != 0) ? ((r << 1) ^ 0x04c11db7) : (r << 1);\n    }\n    this.checksumTable[i] = (r & 0xffffffff);\n  }\n};\n\nOggOpusEncoder.prototype.setOpusControl = function( control, value ){\n  var location = this._malloc( 4 );\n  this.HEAP32[ location >> 2 ] = value;\n  this._opus_encoder_ctl( this.encoder, control, location );\n  this._free( location );\n};\n\nOggOpusEncoder.prototype.initCodec = function() {\n  var errLocation = this._malloc( 4 );\n  this.encoder = this._opus_encoder_create( this.config.encoderSampleRate, this.config.numberOfChannels, this.config.encoderApplication, errLocation );\n  this._free( errLocation );\n\n  if ( this.config.encoderBitRate ) {\n    this.setOpusControl( 4002, this.config.encoderBitRate );\n  }\n\n  if ( this.config.encoderComplexity ) {\n    this.setOpusControl( 4010, this.config.encoderComplexity );\n  }\n\n  this.encoderSamplesPerChannel = this.config.encoderSampleRate * this.config.encoderFrameSize / 1000;\n  this.encoderSamplesPerChannelPointer = this._malloc( 4 );\n  this.HEAP32[ this.encoderSamplesPerChannelPointer >> 2 ] = this.encoderSamplesPerChannel;\n\n  this.encoderBufferLength = this.encoderSamplesPerChannel * this.config.numberOfChannels;\n  this.encoderBufferPointer = this._malloc( this.encoderBufferLength * 4 ); // 4 bytes per sample\n  this.encoderBuffer = this.HEAPF32.subarray( this.encoderBufferPointer >> 2, (this.encoderBufferPointer >> 2) + this.encoderBufferLength );\n\n  this.encoderOutputMaxLength = 4000;\n  this.encoderOutputPointer = this._malloc( this.encoderOutputMaxLength );\n  this.encoderOutputBuffer = this.HEAPU8.subarray( this.encoderOutputPointer, this.encoderOutputPointer + this.encoderOutputMaxLength );\n};\n\nOggOpusEncoder.prototype.initResampler = function() {\n  var errLocation = this._malloc( 4 );\n  this.resampler = this._speex_resampler_init( this.config.numberOfChannels, this.config.originalSampleRate, this.config.encoderSampleRate, this.config.resampleQuality, errLocation );\n  this._free( errLocation );\n\n  this.resampleBufferIndex = 0;\n  this.resampleSamplesPerChannel = this.config.originalSampleRate * this.config.encoderFrameSize / 1000;\n  this.resampleSamplesPerChannelPointer = this._malloc( 4 );\n  this.HEAP32[ this.resampleSamplesPerChannelPointer >> 2 ] = this.resampleSamplesPerChannel;\n\n  this.resampleBufferLength = this.resampleSamplesPerChannel * this.config.numberOfChannels;\n  this.resampleBufferPointer = this._malloc( this.resampleBufferLength * 4 ); // 4 bytes per sample\n  this.resampleBuffer = this.HEAPF32.subarray( this.resampleBufferPointer >> 2, (this.resampleBufferPointer >> 2) + this.resampleBufferLength );\n};\n\nOggOpusEncoder.prototype.interleave = function( buffers ) {\n  for ( var i = 0; i < this.config.bufferLength; i++ ) {\n    for ( var channel = 0; channel < this.config.numberOfChannels; channel++ ) {\n      this.interleavedBuffers[ i * this.config.numberOfChannels + channel ] = buffers[ channel ][ i ];\n    }\n  }\n\n  return this.interleavedBuffers;\n};\n\nOggOpusEncoder.prototype.segmentPacket = function( packetLength ) {\n  if ( this.config.streamOpusPackets ) {\n    if ( packetLength > 0 ) {\n      var packet = new Uint8Array( HEAPU8.subarray(this.encoderOutputPointer, this.encoderOutputPointer + packetLength) );\n      global['postMessage']({ type: 'opus', data: packet });\n    }\n    return;\n  }\n\n  var packetIndex = 0;\n\n  while ( packetLength >= 0 ) {\n\n    if ( this.segmentTableIndex === 255 ) {\n      this.generatePage();\n      this.headerType = 1;\n    }\n\n    var segmentLength = Math.min( packetLength, 255 );\n    this.segmentTable[ this.segmentTableIndex++ ] = segmentLength;\n    var segment = this.encoderOutputBuffer.subarray( packetIndex, packetIndex + segmentLength );\n\n    this.segmentData.set( segment, this.segmentDataIndex );\n    this.segmentDataIndex += segmentLength;\n    packetIndex += segmentLength;\n    packetLength -= 255;\n  }\n\n  this.granulePosition += ( 48 * this.config.encoderFrameSize );\n  if ( this.segmentTableIndex === 255 ) {\n    this.generatePage();\n    this.headerType = 0;\n  }\n};\n\n\nif (!Module) {\n  Module = {};\n}\n\nModule['mainReady'] = mainReady;\nModule['OggOpusEncoder'] = OggOpusEncoder;\nModule['onRuntimeInitialized'] = mainReadyResolve;\n\nmodule.exports = Module;\n\n/* WEBPACK VAR INJECTION */}.call(this, __webpack_require__(/*! ./../node_modules/webpack/buildin/global.js */ \"./node_modules/webpack/buildin/global.js\")))//# sourceURL=[module]\n//# sourceMappingURL=data:application/json;charset=utf-8;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoiLi9zcmMvZW5jb2Rlcldvcmtlci5qcy5qcyIsInNvdXJjZXMiOlsid2VicGFjazovL0VuY29kZXJXb3JrZXIvLi9zcmMvZW5jb2Rlcldvcmtlci5qcz84YjNjIl0sInNvdXJjZXNDb250ZW50IjpbIlwidXNlIHN0cmljdFwiO1xuXG52YXIgZW5jb2RlcjtcbnZhciBtYWluUmVhZHlSZXNvbHZlO1xudmFyIG1haW5SZWFkeSA9IG5ldyBQcm9taXNlKGZ1bmN0aW9uKHJlc29sdmUpeyBtYWluUmVhZHlSZXNvbHZlID0gcmVzb2x2ZTsgfSk7XG5cbmdsb2JhbFsnb25tZXNzYWdlJ10gPSBmdW5jdGlvbiggZSApe1xuICBtYWluUmVhZHkudGhlbihmdW5jdGlvbigpe1xuICAgIHN3aXRjaCggZVsnZGF0YSddWydjb21tYW5kJ10gKXtcblxuICAgICAgY2FzZSAnZW5jb2RlJzpcbiAgICAgICAgaWYgKGVuY29kZXIpe1xuICAgICAgICAgIGVuY29kZXIuZW5jb2RlKCBlWydkYXRhJ11bJ2J1ZmZlcnMnXSApO1xuICAgICAgICB9XG4gICAgICAgIGJyZWFrO1xuXG4gICAgICBjYXNlICdnZXRIZWFkZXJQYWdlcyc6XG4gICAgICAgIGlmIChlbmNvZGVyKXtcbiAgICAgICAgICBlbmNvZGVyLmdlbmVyYXRlSWRQYWdlKCk7XG4gICAgICAgICAgZW5jb2Rlci5nZW5lcmF0ZUNvbW1lbnRQYWdlKCk7XG4gICAgICAgIH1cbiAgICAgICAgYnJlYWs7XG5cbiAgICAgIGNhc2UgJ2RvbmUnOlxuICAgICAgICBpZiAoZW5jb2Rlcikge1xuICAgICAgICAgIGVuY29kZXIuZW5jb2RlRmluYWxGcmFtZSgpO1xuICAgICAgICAgIGdsb2JhbFsncG9zdE1lc3NhZ2UnXSgge21lc3NhZ2U6ICdkb25lJ30gKTtcbiAgICAgICAgfVxuICAgICAgICBicmVhaztcblxuICAgICAgY2FzZSAnY2xvc2UnOlxuICAgICAgICBnbG9iYWxbJ3Bvc3RNZXNzYWdlJ10oIHttZXNzYWdlOiAnY2xvc2UnfSApO1xuICAgICAgICBnbG9iYWxbJ2Nsb3NlJ10oKTtcbiAgICAgICAgYnJlYWs7XG5cbiAgICAgIGNhc2UgJ2ZsdXNoJzpcbiAgICAgICAgaWYgKGVuY29kZXIpIHtcbiAgICAgICAgICBlbmNvZGVyLmZsdXNoKCk7XG4gICAgICAgIH1cbiAgICAgICAgYnJlYWs7XG5cbiAgICAgIGNhc2UgJ2Rlc3Ryb3knOlxuICAgICAgICBpZiAoZW5jb2Rlcikge1xuICAgICAgICAgIGVuY29kZXIuZGVzdHJveSgpO1xuICAgICAgICB9XG4gICAgICAgIGJyZWFrO1xuXG4gICAgICBjYXNlICdpbml0JzpcbiAgICAgICAgaWYgKCBlbmNvZGVyICkge1xuICAgICAgICAgIGVuY29kZXIuZGVzdHJveSgpO1xuICAgICAgICB9XG4gICAgICAgIGVuY29kZXIgPSBuZXcgT2dnT3B1c0VuY29kZXIoIGVbJ2RhdGEnXSwgTW9kdWxlICk7XG4gICAgICAgIGdsb2JhbFsncG9zdE1lc3NhZ2UnXSgge21lc3NhZ2U6ICdyZWFkeSd9ICk7XG4gICAgICAgIGJyZWFrO1xuXG4gICAgICBkZWZhdWx0OlxuICAgICAgICAvLyBJZ25vcmUgYW55IHVua25vd24gY29tbWFuZHMgYW5kIGNvbnRpbnVlIHJlY2VpdmluZyBjb21tYW5kc1xuICAgIH1cbiAgfSk7XG59O1xuXG5cbnZhciBPZ2dPcHVzRW5jb2RlciA9IGZ1bmN0aW9uKCBjb25maWcsIE1vZHVsZSApe1xuXG4gIGlmICggIU1vZHVsZSApIHtcbiAgICB0aHJvdyBuZXcgRXJyb3IoJ01vZHVsZSB3aXRoIGV4cG9ydHMgcmVxdWlyZWQgdG8gaW5pdGlhbGl6ZSBhbiBlbmNvZGVyIGluc3RhbmNlJyk7XG4gIH1cblxuICB0aGlzLmNvbmZpZyA9IE9iamVjdC5hc3NpZ24oe1xuICAgIGJ1ZmZlckxlbmd0aDogNDA5NiwgLy8gRGVmaW5lIHNpemUgb2YgaW5jb21pbmcgYnVmZmVyXG4gICAgZW5jb2RlckFwcGxpY2F0aW9uOiAyMDQ5LCAvLyAyMDQ4ID0gVm9pY2UgKExvd2VyIGZpZGVsaXR5KVxuICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgLy8gMjA0OSA9IEZ1bGwgQmFuZCBBdWRpbyAoSGlnaGVzdCBmaWRlbGl0eSlcbiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC8vIDIwNTEgPSBSZXN0cmljdGVkIExvdyBEZWxheSAoTG93ZXN0IGxhdGVuY3kpXG4gICAgZW5jb2RlckZyYW1lU2l6ZTogMjAsIC8vIFNwZWNpZmllZCBpbiBtcy5cbiAgICBlbmNvZGVyU2FtcGxlUmF0ZTogNDgwMDAsIC8vIERlc2lyZWQgZW5jb2Rpbmcgc2FtcGxlIHJhdGUuIEF1ZGlvIHdpbGwgYmUgcmVzYW1wbGVkXG4gICAgbWF4RnJhbWVzUGVyUGFnZTogNDAsIC8vIFRyYWRlb2ZmIGxhdGVuY3kgd2l0aCBvdmVyaGVhZFxuICAgIG51bWJlck9mQ2hhbm5lbHM6IDEsXG4gICAgb3JpZ2luYWxTYW1wbGVSYXRlOiA0NDEwMCxcbiAgICByZXNhbXBsZVF1YWxpdHk6IDMsIC8vIFZhbHVlIGJldHdlZW4gMCBhbmQgMTAgaW5jbHVzaXZlLiAxMCBiZWluZyBoaWdoZXN0IHF1YWxpdHkuXG4gICAgc2VyaWFsOiBNYXRoLmZsb29yKE1hdGgucmFuZG9tKCkgKiA0Mjk0OTY3Mjk2KSxcbiAgICBzdHJlYW1PcHVzUGFja2V0czogZmFsc2VcbiAgfSwgY29uZmlnICk7XG5cbiAgdGhpcy5fb3B1c19lbmNvZGVyX2NyZWF0ZSA9IE1vZHVsZS5fb3B1c19lbmNvZGVyX2NyZWF0ZTtcbiAgdGhpcy5fb3B1c19lbmNvZGVyX2Rlc3Ryb3kgPSBNb2R1bGUuX29wdXNfZW5jb2Rlcl9kZXN0cm95O1xuICB0aGlzLl9vcHVzX2VuY29kZXJfY3RsID0gTW9kdWxlLl9vcHVzX2VuY29kZXJfY3RsO1xuICB0aGlzLl9zcGVleF9yZXNhbXBsZXJfcHJvY2Vzc19pbnRlcmxlYXZlZF9mbG9hdCA9IE1vZHVsZS5fc3BlZXhfcmVzYW1wbGVyX3Byb2Nlc3NfaW50ZXJsZWF2ZWRfZmxvYXQ7XG4gIHRoaXMuX3NwZWV4X3Jlc2FtcGxlcl9pbml0ID0gTW9kdWxlLl9zcGVleF9yZXNhbXBsZXJfaW5pdDtcbiAgdGhpcy5fc3BlZXhfcmVzYW1wbGVyX2Rlc3Ryb3kgPSBNb2R1bGUuX3NwZWV4X3Jlc2FtcGxlcl9kZXN0cm95O1xuICB0aGlzLl9vcHVzX2VuY29kZV9mbG9hdCA9IE1vZHVsZS5fb3B1c19lbmNvZGVfZmxvYXQ7XG4gIHRoaXMuX2ZyZWUgPSBNb2R1bGUuX2ZyZWU7XG4gIHRoaXMuX21hbGxvYyA9IE1vZHVsZS5fbWFsbG9jO1xuICB0aGlzLkhFQVBVOCA9IE1vZHVsZS5IRUFQVTg7XG4gIHRoaXMuSEVBUDMyID0gTW9kdWxlLkhFQVAzMjtcbiAgdGhpcy5IRUFQRjMyID0gTW9kdWxlLkhFQVBGMzI7XG5cbiAgdGhpcy5wYWdlSW5kZXggPSAwO1xuICB0aGlzLmdyYW51bGVQb3NpdGlvbiA9IDA7XG4gIHRoaXMuc2VnbWVudERhdGEgPSBuZXcgVWludDhBcnJheSggNjUwMjUgKTsgLy8gTWF4aW11bSBsZW5ndGggb2Ygb2dnT3B1cyBkYXRhXG4gIHRoaXMuc2VnbWVudERhdGFJbmRleCA9IDA7XG4gIHRoaXMuc2VnbWVudFRhYmxlID0gbmV3IFVpbnQ4QXJyYXkoIDI1NSApOyAvLyBNYXhpbXVtIGRhdGEgc2VnbWVudHNcbiAgdGhpcy5zZWdtZW50VGFibGVJbmRleCA9IDA7XG4gIHRoaXMuZnJhbWVzSW5QYWdlID0gMDtcblxuICB0aGlzLmluaXRDaGVja3N1bVRhYmxlKCk7XG4gIHRoaXMuaW5pdENvZGVjKCk7XG4gIHRoaXMuaW5pdFJlc2FtcGxlcigpO1xuXG4gIGlmICggdGhpcy5jb25maWcubnVtYmVyT2ZDaGFubmVscyA9PT0gMSApIHtcbiAgICB0aGlzLmludGVybGVhdmUgPSBmdW5jdGlvbiggYnVmZmVycyApIHsgcmV0dXJuIGJ1ZmZlcnNbMF07IH07XG4gIH1cbiAgZWxzZSB7XG4gICAgdGhpcy5pbnRlcmxlYXZlZEJ1ZmZlcnMgPSBuZXcgRmxvYXQzMkFycmF5KCB0aGlzLmNvbmZpZy5idWZmZXJMZW5ndGggKiB0aGlzLmNvbmZpZy5udW1iZXJPZkNoYW5uZWxzICk7XG4gIH1cblxufTtcblxuT2dnT3B1c0VuY29kZXIucHJvdG90eXBlLmVuY29kZSA9IGZ1bmN0aW9uKCBidWZmZXJzICkge1xuICB2YXIgc2FtcGxlcyA9IHRoaXMuaW50ZXJsZWF2ZSggYnVmZmVycyApO1xuICB2YXIgc2FtcGxlSW5kZXggPSAwO1xuXG4gIHdoaWxlICggc2FtcGxlSW5kZXggPCBzYW1wbGVzLmxlbmd0aCApIHtcblxuICAgIHZhciBsZW5ndGhUb0NvcHkgPSBNYXRoLm1pbiggdGhpcy5yZXNhbXBsZUJ1ZmZlckxlbmd0aCAtIHRoaXMucmVzYW1wbGVCdWZmZXJJbmRleCwgc2FtcGxlcy5sZW5ndGggLSBzYW1wbGVJbmRleCApO1xuICAgIHRoaXMucmVzYW1wbGVCdWZmZXIuc2V0KCBzYW1wbGVzLnN1YmFycmF5KCBzYW1wbGVJbmRleCwgc2FtcGxlSW5kZXgrbGVuZ3RoVG9Db3B5ICksIHRoaXMucmVzYW1wbGVCdWZmZXJJbmRleCApO1xuICAgIHNhbXBsZUluZGV4ICs9IGxlbmd0aFRvQ29weTtcbiAgICB0aGlzLnJlc2FtcGxlQnVmZmVySW5kZXggKz0gbGVuZ3RoVG9Db3B5O1xuXG4gICAgaWYgKCB0aGlzLnJlc2FtcGxlQnVmZmVySW5kZXggPT09IHRoaXMucmVzYW1wbGVCdWZmZXJMZW5ndGggKSB7XG4gICAgICB0aGlzLl9zcGVleF9yZXNhbXBsZXJfcHJvY2Vzc19pbnRlcmxlYXZlZF9mbG9hdCggdGhpcy5yZXNhbXBsZXIsIHRoaXMucmVzYW1wbGVCdWZmZXJQb2ludGVyLCB0aGlzLnJlc2FtcGxlU2FtcGxlc1BlckNoYW5uZWxQb2ludGVyLCB0aGlzLmVuY29kZXJCdWZmZXJQb2ludGVyLCB0aGlzLmVuY29kZXJTYW1wbGVzUGVyQ2hhbm5lbFBvaW50ZXIgKTtcbiAgICAgIHZhciBwYWNrZXRMZW5ndGggPSB0aGlzLl9vcHVzX2VuY29kZV9mbG9hdCggdGhpcy5lbmNvZGVyLCB0aGlzLmVuY29kZXJCdWZmZXJQb2ludGVyLCB0aGlzLmVuY29kZXJTYW1wbGVzUGVyQ2hhbm5lbCwgdGhpcy5lbmNvZGVyT3V0cHV0UG9pbnRlciwgdGhpcy5lbmNvZGVyT3V0cHV0TWF4TGVuZ3RoICk7XG4gICAgICB0aGlzLnNlZ21lbnRQYWNrZXQoIHBhY2tldExlbmd0aCApO1xuICAgICAgdGhpcy5yZXNhbXBsZUJ1ZmZlckluZGV4ID0gMDtcblxuICAgICAgdGhpcy5mcmFtZXNJblBhZ2UrKztcbiAgICAgIGlmICggdGhpcy5mcmFtZXNJblBhZ2UgPj0gdGhpcy5jb25maWcubWF4RnJhbWVzUGVyUGFnZSApIHtcbiAgICAgICAgdGhpcy5nZW5lcmF0ZVBhZ2UoKTtcbiAgICAgIH1cbiAgICB9XG4gIH1cbn07XG5cbk9nZ09wdXNFbmNvZGVyLnByb3RvdHlwZS5kZXN0cm95ID0gZnVuY3Rpb24oKSB7XG4gIGlmICggdGhpcy5lbmNvZGVyICkge1xuICAgIHRoaXMuX2ZyZWUodGhpcy5lbmNvZGVyU2FtcGxlc1BlckNoYW5uZWxQb2ludGVyKTtcbiAgICBkZWxldGUgdGhpcy5lbmNvZGVyU2FtcGxlc1BlckNoYW5uZWxQb2ludGVyO1xuICAgIHRoaXMuX2ZyZWUodGhpcy5lbmNvZGVyQnVmZmVyUG9pbnRlcik7XG4gICAgZGVsZXRlIHRoaXMuZW5jb2RlckJ1ZmZlclBvaW50ZXI7XG4gICAgdGhpcy5fZnJlZSh0aGlzLmVuY29kZXJPdXRwdXRQb2ludGVyKTtcbiAgICBkZWxldGUgdGhpcy5lbmNvZGVyT3V0cHV0UG9pbnRlcjtcbiAgICB0aGlzLl9mcmVlKHRoaXMucmVzYW1wbGVTYW1wbGVzUGVyQ2hhbm5lbFBvaW50ZXIpO1xuICAgIGRlbGV0ZSB0aGlzLnJlc2FtcGxlU2FtcGxlc1BlckNoYW5uZWxQb2ludGVyO1xuICAgIHRoaXMuX2ZyZWUodGhpcy5yZXNhbXBsZUJ1ZmZlclBvaW50ZXIpO1xuICAgIGRlbGV0ZSB0aGlzLnJlc2FtcGxlQnVmZmVyUG9pbnRlcjtcbiAgICB0aGlzLl9zcGVleF9yZXNhbXBsZXJfZGVzdHJveSh0aGlzLnJlc2FtcGxlcik7XG4gICAgZGVsZXRlIHRoaXMucmVzYW1wbGVyO1xuICAgIHRoaXMuX29wdXNfZW5jb2Rlcl9kZXN0cm95KHRoaXMuZW5jb2Rlcik7XG4gICAgZGVsZXRlIHRoaXMuZW5jb2RlcjtcbiAgfVxufTtcblxuT2dnT3B1c0VuY29kZXIucHJvdG90eXBlLmZsdXNoID0gZnVuY3Rpb24oKSB7XG4gIGlmICggdGhpcy5mcmFtZXNJblBhZ2UgKSB7XG4gICAgdGhpcy5nZW5lcmF0ZVBhZ2UoKTtcbiAgfVxuICAvLyBkaXNjYXJkIGFueSBwZW5kaW5nIGRhdGEgaW4gcmVzYW1wbGUgYnVmZmVyIChvbmx5IGEgZmV3IG1zIHdvcnRoKVxuICB0aGlzLnJlc2FtcGxlQnVmZmVySW5kZXggPSAwO1xuICBnbG9iYWxbJ3Bvc3RNZXNzYWdlJ10oIHttZXNzYWdlOiAnZmx1c2hlZCd9ICk7XG59O1xuXG5PZ2dPcHVzRW5jb2Rlci5wcm90b3R5cGUuZW5jb2RlRmluYWxGcmFtZSA9IGZ1bmN0aW9uKCkge1xuICBpZiAoIHRoaXMucmVzYW1wbGVCdWZmZXJJbmRleCA+IDAgKSB7XG4gICAgdmFyIGZpbmFsRnJhbWVCdWZmZXJzID0gW107XG4gICAgZm9yICggdmFyIGkgPSAwOyBpIDwgdGhpcy5jb25maWcubnVtYmVyT2ZDaGFubmVsczsgKytpICkge1xuICAgICAgZmluYWxGcmFtZUJ1ZmZlcnMucHVzaCggbmV3IEZsb2F0MzJBcnJheSggdGhpcy5jb25maWcuYnVmZmVyTGVuZ3RoIC0gKHRoaXMucmVzYW1wbGVCdWZmZXJJbmRleCAvIHRoaXMuY29uZmlnLm51bWJlck9mQ2hhbm5lbHMpICkpO1xuICAgIH1cbiAgICB0aGlzLmVuY29kZSggZmluYWxGcmFtZUJ1ZmZlcnMgKTtcbiAgfVxuICB0aGlzLmhlYWRlclR5cGUgKz0gNDtcbiAgdGhpcy5nZW5lcmF0ZVBhZ2UoKTtcbn07XG5cbk9nZ09wdXNFbmNvZGVyLnByb3RvdHlwZS5nZXRDaGVja3N1bSA9IGZ1bmN0aW9uKCBkYXRhICl7XG4gIHZhciBjaGVja3N1bSA9IDA7XG4gIGZvciAoIHZhciBpID0gMDsgaSA8IGRhdGEubGVuZ3RoOyBpKysgKSB7XG4gICAgY2hlY2tzdW0gPSAoY2hlY2tzdW0gPDwgOCkgXiB0aGlzLmNoZWNrc3VtVGFibGVbICgoY2hlY2tzdW0+Pj4yNCkgJiAweGZmKSBeIGRhdGFbaV0gXTtcbiAgfVxuICByZXR1cm4gY2hlY2tzdW0gPj4+IDA7XG59O1xuXG5PZ2dPcHVzRW5jb2Rlci5wcm90b3R5cGUuZ2VuZXJhdGVDb21tZW50UGFnZSA9IGZ1bmN0aW9uKCl7XG4gIGlmICggdGhpcy5jb25maWcuc3RyZWFtT3B1c1BhY2tldHMgKSB7IHJldHVybjsgfVxuICB2YXIgc2VnbWVudERhdGFWaWV3ID0gbmV3IERhdGFWaWV3KCB0aGlzLnNlZ21lbnREYXRhLmJ1ZmZlciApO1xuICBzZWdtZW50RGF0YVZpZXcuc2V0VWludDMyKCAwLCAxOTM3MDc2MzAzLCB0cnVlICkgLy8gTWFnaWMgU2lnbmF0dXJlICdPcHVzJ1xuICBzZWdtZW50RGF0YVZpZXcuc2V0VWludDMyKCA0LCAxOTM2MTU0OTY0LCB0cnVlICkgLy8gTWFnaWMgU2lnbmF0dXJlICdUYWdzJ1xuICBzZWdtZW50RGF0YVZpZXcuc2V0VWludDMyKCA4LCAxMCwgdHJ1ZSApOyAvLyBWZW5kb3IgTGVuZ3RoXG4gIHNlZ21lbnREYXRhVmlldy5zZXRVaW50MzIoIDEyLCAxODY4Nzg0OTc4LCB0cnVlICk7IC8vIFZlbmRvciBuYW1lICdSZWNvJ1xuICBzZWdtZW50RGF0YVZpZXcuc2V0VWludDMyKCAxNiwgMTkxOTI0NzQ3NCwgdHJ1ZSApOyAvLyBWZW5kb3IgbmFtZSAncmRlcidcbiAgc2VnbWVudERhdGFWaWV3LnNldFVpbnQxNiggMjAsIDIxMzIyLCB0cnVlICk7IC8vIFZlbmRvciBuYW1lICdKUydcbiAgc2VnbWVudERhdGFWaWV3LnNldFVpbnQzMiggMjIsIDAsIHRydWUgKTsgLy8gVXNlciBDb21tZW50IExpc3QgTGVuZ3RoXG4gIHRoaXMuc2VnbWVudFRhYmxlSW5kZXggPSAxO1xuICB0aGlzLnNlZ21lbnREYXRhSW5kZXggPSB0aGlzLnNlZ21lbnRUYWJsZVswXSA9IDI2O1xuICB0aGlzLmhlYWRlclR5cGUgPSAwO1xuICB0aGlzLmdlbmVyYXRlUGFnZSgpO1xufTtcblxuT2dnT3B1c0VuY29kZXIucHJvdG90eXBlLmdlbmVyYXRlSWRQYWdlID0gZnVuY3Rpb24oKXtcbiAgaWYgKCB0aGlzLmNvbmZpZy5zdHJlYW1PcHVzUGFja2V0cyApIHsgcmV0dXJuOyB9XG4gIHZhciBzZWdtZW50RGF0YVZpZXcgPSBuZXcgRGF0YVZpZXcoIHRoaXMuc2VnbWVudERhdGEuYnVmZmVyICk7XG4gIHNlZ21lbnREYXRhVmlldy5zZXRVaW50MzIoIDAsIDE5MzcwNzYzMDMsIHRydWUgKSAvLyBNYWdpYyBTaWduYXR1cmUgJ09wdXMnXG4gIHNlZ21lbnREYXRhVmlldy5zZXRVaW50MzIoIDQsIDE2ODQxMDQ1MjAsIHRydWUgKSAvLyBNYWdpYyBTaWduYXR1cmUgJ0hlYWQnXG4gIHNlZ21lbnREYXRhVmlldy5zZXRVaW50OCggOCwgMSwgdHJ1ZSApOyAvLyBWZXJzaW9uXG4gIHNlZ21lbnREYXRhVmlldy5zZXRVaW50OCggOSwgdGhpcy5jb25maWcubnVtYmVyT2ZDaGFubmVscywgdHJ1ZSApOyAvLyBDaGFubmVsIGNvdW50XG4gIHNlZ21lbnREYXRhVmlldy5zZXRVaW50MTYoIDEwLCAzODQwLCB0cnVlICk7IC8vIHByZS1za2lwICg4MG1zKVxuICBzZWdtZW50RGF0YVZpZXcuc2V0VWludDMyKCAxMiwgdGhpcy5jb25maWcub3JpZ2luYWxTYW1wbGVSYXRlT3ZlcnJpZGUgfHwgdGhpcy5jb25maWcub3JpZ2luYWxTYW1wbGVSYXRlLCB0cnVlICk7IC8vIG9yaWdpbmFsIHNhbXBsZSByYXRlXG4gIHNlZ21lbnREYXRhVmlldy5zZXRVaW50MTYoIDE2LCAwLCB0cnVlICk7IC8vIG91dHB1dCBnYWluXG4gIHNlZ21lbnREYXRhVmlldy5zZXRVaW50OCggMTgsIDAsIHRydWUgKTsgLy8gY2hhbm5lbCBtYXAgMCA9IG1vbm8gb3Igc3RlcmVvXG4gIHRoaXMuc2VnbWVudFRhYmxlSW5kZXggPSAxO1xuICB0aGlzLnNlZ21lbnREYXRhSW5kZXggPSB0aGlzLnNlZ21lbnRUYWJsZVswXSA9IDE5O1xuICB0aGlzLmhlYWRlclR5cGUgPSAyO1xuICB0aGlzLmdlbmVyYXRlUGFnZSgpO1xufTtcblxuT2dnT3B1c0VuY29kZXIucHJvdG90eXBlLmdlbmVyYXRlUGFnZSA9IGZ1bmN0aW9uKCl7XG4gIGlmICggdGhpcy5jb25maWcuc3RyZWFtT3B1c1BhY2tldHMgKSB7IHJldHVybjsgfVxuICB2YXIgZ3JhbnVsZVBvc2l0aW9uID0gKCB0aGlzLmxhc3RQb3NpdGl2ZUdyYW51bGVQb3NpdGlvbiA9PT0gdGhpcy5ncmFudWxlUG9zaXRpb24pID8gLTEgOiB0aGlzLmdyYW51bGVQb3NpdGlvbjtcbiAgdmFyIHBhZ2VCdWZmZXIgPSBuZXcgQXJyYXlCdWZmZXIoICAyNyArIHRoaXMuc2VnbWVudFRhYmxlSW5kZXggKyB0aGlzLnNlZ21lbnREYXRhSW5kZXggKTtcbiAgdmFyIHBhZ2VCdWZmZXJWaWV3ID0gbmV3IERhdGFWaWV3KCBwYWdlQnVmZmVyICk7XG4gIHZhciBwYWdlID0gbmV3IFVpbnQ4QXJyYXkoIHBhZ2VCdWZmZXIgKTtcblxuICBwYWdlQnVmZmVyVmlldy5zZXRVaW50MzIoIDAsIDEzOTkyODU1ODMsIHRydWUpOyAvLyBDYXB0dXJlIFBhdHRlcm4gc3RhcnRzIGFsbCBwYWdlIGhlYWRlcnMgJ09nZ1MnXG4gIHBhZ2VCdWZmZXJWaWV3LnNldFVpbnQ4KCA0LCAwLCB0cnVlICk7IC8vIFZlcnNpb25cbiAgcGFnZUJ1ZmZlclZpZXcuc2V0VWludDgoIDUsIHRoaXMuaGVhZGVyVHlwZSwgdHJ1ZSApOyAvLyAxID0gY29udGludWF0aW9uLCAyID0gYmVnaW5uaW5nIG9mIHN0cmVhbSwgNCA9IGVuZCBvZiBzdHJlYW1cblxuICAvLyBOdW1iZXIgb2Ygc2FtcGxlcyB1cHRvIGFuZCBpbmNsdWRpbmcgdGhpcyBwYWdlIGF0IDQ4MDAwSHosIGludG8gc2lnbmVkIDY0IGJpdCBMaXR0bGUgRW5kaWFuIGludGVnZXJcbiAgLy8gSmF2YXNjcmlwdCBOdW1iZXIgbWF4aW11bSB2YWx1ZSBpcyA1MyBiaXRzIG9yIDJeNTMgLSAxXG4gIHBhZ2VCdWZmZXJWaWV3LnNldFVpbnQzMiggNiwgZ3JhbnVsZVBvc2l0aW9uLCB0cnVlICk7XG4gIGlmIChncmFudWxlUG9zaXRpb24gPCAwKSB7XG4gICAgcGFnZUJ1ZmZlclZpZXcuc2V0SW50MzIoIDEwLCBNYXRoLmNlaWwoZ3JhbnVsZVBvc2l0aW9uLzQyOTQ5NjcyOTcpIC0gMSwgdHJ1ZSApO1xuICB9XG4gIGVsc2Uge1xuICAgIHBhZ2VCdWZmZXJWaWV3LnNldEludDMyKCAxMCwgTWF0aC5mbG9vcihncmFudWxlUG9zaXRpb24vNDI5NDk2NzI5NiksIHRydWUgKTtcbiAgfVxuXG4gIHBhZ2VCdWZmZXJWaWV3LnNldFVpbnQzMiggMTQsIHRoaXMuY29uZmlnLnNlcmlhbCwgdHJ1ZSApOyAvLyBCaXRzdHJlYW0gc2VyaWFsIG51bWJlclxuICBwYWdlQnVmZmVyVmlldy5zZXRVaW50MzIoIDE4LCB0aGlzLnBhZ2VJbmRleCsrLCB0cnVlICk7IC8vIFBhZ2Ugc2VxdWVuY2UgbnVtYmVyXG4gIHBhZ2VCdWZmZXJWaWV3LnNldFVpbnQ4KCAyNiwgdGhpcy5zZWdtZW50VGFibGVJbmRleCwgdHJ1ZSApOyAvLyBOdW1iZXIgb2Ygc2VnbWVudHMgaW4gcGFnZS5cbiAgcGFnZS5zZXQoIHRoaXMuc2VnbWVudFRhYmxlLnN1YmFycmF5KDAsIHRoaXMuc2VnbWVudFRhYmxlSW5kZXgpLCAyNyApOyAvLyBTZWdtZW50IFRhYmxlXG4gIHBhZ2Uuc2V0KCB0aGlzLnNlZ21lbnREYXRhLnN1YmFycmF5KDAsIHRoaXMuc2VnbWVudERhdGFJbmRleCksIDI3ICsgdGhpcy5zZWdtZW50VGFibGVJbmRleCApOyAvLyBTZWdtZW50IERhdGFcbiAgcGFnZUJ1ZmZlclZpZXcuc2V0VWludDMyKCAyMiwgdGhpcy5nZXRDaGVja3N1bSggcGFnZSApLCB0cnVlICk7IC8vIENoZWNrc3VtXG5cbiAgZ2xvYmFsWydwb3N0TWVzc2FnZSddKCB7bWVzc2FnZTogJ3BhZ2UnLCBwYWdlOiBwYWdlLCBzYW1wbGVQb3NpdGlvbjogdGhpcy5ncmFudWxlUG9zaXRpb259LCBbcGFnZS5idWZmZXJdICk7XG4gIHRoaXMuc2VnbWVudFRhYmxlSW5kZXggPSAwO1xuICB0aGlzLnNlZ21lbnREYXRhSW5kZXggPSAwO1xuICB0aGlzLmZyYW1lc0luUGFnZSA9IDA7XG4gIGlmICggZ3JhbnVsZVBvc2l0aW9uID4gMCApIHtcbiAgICB0aGlzLmxhc3RQb3NpdGl2ZUdyYW51bGVQb3NpdGlvbiA9IGdyYW51bGVQb3NpdGlvbjtcbiAgfVxufTtcblxuT2dnT3B1c0VuY29kZXIucHJvdG90eXBlLmluaXRDaGVja3N1bVRhYmxlID0gZnVuY3Rpb24oKXtcbiAgdGhpcy5jaGVja3N1bVRhYmxlID0gW107XG4gIGZvciAoIHZhciBpID0gMDsgaSA8IDI1NjsgaSsrICkge1xuICAgIHZhciByID0gaSA8PCAyNDtcbiAgICBmb3IgKCB2YXIgaiA9IDA7IGogPCA4OyBqKysgKSB7XG4gICAgICByID0gKChyICYgMHg4MDAwMDAwMCkgIT0gMCkgPyAoKHIgPDwgMSkgXiAweDA0YzExZGI3KSA6IChyIDw8IDEpO1xuICAgIH1cbiAgICB0aGlzLmNoZWNrc3VtVGFibGVbaV0gPSAociAmIDB4ZmZmZmZmZmYpO1xuICB9XG59O1xuXG5PZ2dPcHVzRW5jb2Rlci5wcm90b3R5cGUuc2V0T3B1c0NvbnRyb2wgPSBmdW5jdGlvbiggY29udHJvbCwgdmFsdWUgKXtcbiAgdmFyIGxvY2F0aW9uID0gdGhpcy5fbWFsbG9jKCA0ICk7XG4gIHRoaXMuSEVBUDMyWyBsb2NhdGlvbiA+PiAyIF0gPSB2YWx1ZTtcbiAgdGhpcy5fb3B1c19lbmNvZGVyX2N0bCggdGhpcy5lbmNvZGVyLCBjb250cm9sLCBsb2NhdGlvbiApO1xuICB0aGlzLl9mcmVlKCBsb2NhdGlvbiApO1xufTtcblxuT2dnT3B1c0VuY29kZXIucHJvdG90eXBlLmluaXRDb2RlYyA9IGZ1bmN0aW9uKCkge1xuICB2YXIgZXJyTG9jYXRpb24gPSB0aGlzLl9tYWxsb2MoIDQgKTtcbiAgdGhpcy5lbmNvZGVyID0gdGhpcy5fb3B1c19lbmNvZGVyX2NyZWF0ZSggdGhpcy5jb25maWcuZW5jb2RlclNhbXBsZVJhdGUsIHRoaXMuY29uZmlnLm51bWJlck9mQ2hhbm5lbHMsIHRoaXMuY29uZmlnLmVuY29kZXJBcHBsaWNhdGlvbiwgZXJyTG9jYXRpb24gKTtcbiAgdGhpcy5fZnJlZSggZXJyTG9jYXRpb24gKTtcblxuICBpZiAoIHRoaXMuY29uZmlnLmVuY29kZXJCaXRSYXRlICkge1xuICAgIHRoaXMuc2V0T3B1c0NvbnRyb2woIDQwMDIsIHRoaXMuY29uZmlnLmVuY29kZXJCaXRSYXRlICk7XG4gIH1cblxuICBpZiAoIHRoaXMuY29uZmlnLmVuY29kZXJDb21wbGV4aXR5ICkge1xuICAgIHRoaXMuc2V0T3B1c0NvbnRyb2woIDQwMTAsIHRoaXMuY29uZmlnLmVuY29kZXJDb21wbGV4aXR5ICk7XG4gIH1cblxuICB0aGlzLmVuY29kZXJTYW1wbGVzUGVyQ2hhbm5lbCA9IHRoaXMuY29uZmlnLmVuY29kZXJTYW1wbGVSYXRlICogdGhpcy5jb25maWcuZW5jb2RlckZyYW1lU2l6ZSAvIDEwMDA7XG4gIHRoaXMuZW5jb2RlclNhbXBsZXNQZXJDaGFubmVsUG9pbnRlciA9IHRoaXMuX21hbGxvYyggNCApO1xuICB0aGlzLkhFQVAzMlsgdGhpcy5lbmNvZGVyU2FtcGxlc1BlckNoYW5uZWxQb2ludGVyID4+IDIgXSA9IHRoaXMuZW5jb2RlclNhbXBsZXNQZXJDaGFubmVsO1xuXG4gIHRoaXMuZW5jb2RlckJ1ZmZlckxlbmd0aCA9IHRoaXMuZW5jb2RlclNhbXBsZXNQZXJDaGFubmVsICogdGhpcy5jb25maWcubnVtYmVyT2ZDaGFubmVscztcbiAgdGhpcy5lbmNvZGVyQnVmZmVyUG9pbnRlciA9IHRoaXMuX21hbGxvYyggdGhpcy5lbmNvZGVyQnVmZmVyTGVuZ3RoICogNCApOyAvLyA0IGJ5dGVzIHBlciBzYW1wbGVcbiAgdGhpcy5lbmNvZGVyQnVmZmVyID0gdGhpcy5IRUFQRjMyLnN1YmFycmF5KCB0aGlzLmVuY29kZXJCdWZmZXJQb2ludGVyID4+IDIsICh0aGlzLmVuY29kZXJCdWZmZXJQb2ludGVyID4+IDIpICsgdGhpcy5lbmNvZGVyQnVmZmVyTGVuZ3RoICk7XG5cbiAgdGhpcy5lbmNvZGVyT3V0cHV0TWF4TGVuZ3RoID0gNDAwMDtcbiAgdGhpcy5lbmNvZGVyT3V0cHV0UG9pbnRlciA9IHRoaXMuX21hbGxvYyggdGhpcy5lbmNvZGVyT3V0cHV0TWF4TGVuZ3RoICk7XG4gIHRoaXMuZW5jb2Rlck91dHB1dEJ1ZmZlciA9IHRoaXMuSEVBUFU4LnN1YmFycmF5KCB0aGlzLmVuY29kZXJPdXRwdXRQb2ludGVyLCB0aGlzLmVuY29kZXJPdXRwdXRQb2ludGVyICsgdGhpcy5lbmNvZGVyT3V0cHV0TWF4TGVuZ3RoICk7XG59O1xuXG5PZ2dPcHVzRW5jb2Rlci5wcm90b3R5cGUuaW5pdFJlc2FtcGxlciA9IGZ1bmN0aW9uKCkge1xuICB2YXIgZXJyTG9jYXRpb24gPSB0aGlzLl9tYWxsb2MoIDQgKTtcbiAgdGhpcy5yZXNhbXBsZXIgPSB0aGlzLl9zcGVleF9yZXNhbXBsZXJfaW5pdCggdGhpcy5jb25maWcubnVtYmVyT2ZDaGFubmVscywgdGhpcy5jb25maWcub3JpZ2luYWxTYW1wbGVSYXRlLCB0aGlzLmNvbmZpZy5lbmNvZGVyU2FtcGxlUmF0ZSwgdGhpcy5jb25maWcucmVzYW1wbGVRdWFsaXR5LCBlcnJMb2NhdGlvbiApO1xuICB0aGlzLl9mcmVlKCBlcnJMb2NhdGlvbiApO1xuXG4gIHRoaXMucmVzYW1wbGVCdWZmZXJJbmRleCA9IDA7XG4gIHRoaXMucmVzYW1wbGVTYW1wbGVzUGVyQ2hhbm5lbCA9IHRoaXMuY29uZmlnLm9yaWdpbmFsU2FtcGxlUmF0ZSAqIHRoaXMuY29uZmlnLmVuY29kZXJGcmFtZVNpemUgLyAxMDAwO1xuICB0aGlzLnJlc2FtcGxlU2FtcGxlc1BlckNoYW5uZWxQb2ludGVyID0gdGhpcy5fbWFsbG9jKCA0ICk7XG4gIHRoaXMuSEVBUDMyWyB0aGlzLnJlc2FtcGxlU2FtcGxlc1BlckNoYW5uZWxQb2ludGVyID4+IDIgXSA9IHRoaXMucmVzYW1wbGVTYW1wbGVzUGVyQ2hhbm5lbDtcblxuICB0aGlzLnJlc2FtcGxlQnVmZmVyTGVuZ3RoID0gdGhpcy5yZXNhbXBsZVNhbXBsZXNQZXJDaGFubmVsICogdGhpcy5jb25maWcubnVtYmVyT2ZDaGFubmVscztcbiAgdGhpcy5yZXNhbXBsZUJ1ZmZlclBvaW50ZXIgPSB0aGlzLl9tYWxsb2MoIHRoaXMucmVzYW1wbGVCdWZmZXJMZW5ndGggKiA0ICk7IC8vIDQgYnl0ZXMgcGVyIHNhbXBsZVxuICB0aGlzLnJlc2FtcGxlQnVmZmVyID0gdGhpcy5IRUFQRjMyLnN1YmFycmF5KCB0aGlzLnJlc2FtcGxlQnVmZmVyUG9pbnRlciA+PiAyLCAodGhpcy5yZXNhbXBsZUJ1ZmZlclBvaW50ZXIgPj4gMikgKyB0aGlzLnJlc2FtcGxlQnVmZmVyTGVuZ3RoICk7XG59O1xuXG5PZ2dPcHVzRW5jb2Rlci5wcm90b3R5cGUuaW50ZXJsZWF2ZSA9IGZ1bmN0aW9uKCBidWZmZXJzICkge1xuICBmb3IgKCB2YXIgaSA9IDA7IGkgPCB0aGlzLmNvbmZpZy5idWZmZXJMZW5ndGg7IGkrKyApIHtcbiAgICBmb3IgKCB2YXIgY2hhbm5lbCA9IDA7IGNoYW5uZWwgPCB0aGlzLmNvbmZpZy5udW1iZXJPZkNoYW5uZWxzOyBjaGFubmVsKysgKSB7XG4gICAgICB0aGlzLmludGVybGVhdmVkQnVmZmVyc1sgaSAqIHRoaXMuY29uZmlnLm51bWJlck9mQ2hhbm5lbHMgKyBjaGFubmVsIF0gPSBidWZmZXJzWyBjaGFubmVsIF1bIGkgXTtcbiAgICB9XG4gIH1cblxuICByZXR1cm4gdGhpcy5pbnRlcmxlYXZlZEJ1ZmZlcnM7XG59O1xuXG5PZ2dPcHVzRW5jb2Rlci5wcm90b3R5cGUuc2VnbWVudFBhY2tldCA9IGZ1bmN0aW9uKCBwYWNrZXRMZW5ndGggKSB7XG4gIGlmICggdGhpcy5jb25maWcuc3RyZWFtT3B1c1BhY2tldHMgKSB7XG4gICAgaWYgKCBwYWNrZXRMZW5ndGggPiAwICkge1xuICAgICAgdmFyIHBhY2tldCA9IG5ldyBVaW50OEFycmF5KCBIRUFQVTguc3ViYXJyYXkodGhpcy5lbmNvZGVyT3V0cHV0UG9pbnRlciwgdGhpcy5lbmNvZGVyT3V0cHV0UG9pbnRlciArIHBhY2tldExlbmd0aCkgKTtcbiAgICAgIGdsb2JhbFsncG9zdE1lc3NhZ2UnXSh7IHR5cGU6ICdvcHVzJywgZGF0YTogcGFja2V0IH0pO1xuICAgIH1cbiAgICByZXR1cm47XG4gIH1cblxuICB2YXIgcGFja2V0SW5kZXggPSAwO1xuXG4gIHdoaWxlICggcGFja2V0TGVuZ3RoID49IDAgKSB7XG5cbiAgICBpZiAoIHRoaXMuc2VnbWVudFRhYmxlSW5kZXggPT09IDI1NSApIHtcbiAgICAgIHRoaXMuZ2VuZXJhdGVQYWdlKCk7XG4gICAgICB0aGlzLmhlYWRlclR5cGUgPSAxO1xuICAgIH1cblxuICAgIHZhciBzZWdtZW50TGVuZ3RoID0gTWF0aC5taW4oIHBhY2tldExlbmd0aCwgMjU1ICk7XG4gICAgdGhpcy5zZWdtZW50VGFibGVbIHRoaXMuc2VnbWVudFRhYmxlSW5kZXgrKyBdID0gc2VnbWVudExlbmd0aDtcbiAgICB2YXIgc2VnbWVudCA9IHRoaXMuZW5jb2Rlck91dHB1dEJ1ZmZlci5zdWJhcnJheSggcGFja2V0SW5kZXgsIHBhY2tldEluZGV4ICsgc2VnbWVudExlbmd0aCApO1xuXG4gICAgdGhpcy5zZWdtZW50RGF0YS5zZXQoIHNlZ21lbnQsIHRoaXMuc2VnbWVudERhdGFJbmRleCApO1xuICAgIHRoaXMuc2VnbWVudERhdGFJbmRleCArPSBzZWdtZW50TGVuZ3RoO1xuICAgIHBhY2tldEluZGV4ICs9IHNlZ21lbnRMZW5ndGg7XG4gICAgcGFja2V0TGVuZ3RoIC09IDI1NTtcbiAgfVxuXG4gIHRoaXMuZ3JhbnVsZVBvc2l0aW9uICs9ICggNDggKiB0aGlzLmNvbmZpZy5lbmNvZGVyRnJhbWVTaXplICk7XG4gIGlmICggdGhpcy5zZWdtZW50VGFibGVJbmRleCA9PT0gMjU1ICkge1xuICAgIHRoaXMuZ2VuZXJhdGVQYWdlKCk7XG4gICAgdGhpcy5oZWFkZXJUeXBlID0gMDtcbiAgfVxufTtcblxuXG5pZiAoIU1vZHVsZSkge1xuICBNb2R1bGUgPSB7fTtcbn1cblxuTW9kdWxlWydtYWluUmVhZHknXSA9IG1haW5SZWFkeTtcbk1vZHVsZVsnT2dnT3B1c0VuY29kZXInXSA9IE9nZ09wdXNFbmNvZGVyO1xuTW9kdWxlWydvblJ1bnRpbWVJbml0aWFsaXplZCddID0gbWFpblJlYWR5UmVzb2x2ZTtcblxubW9kdWxlLmV4cG9ydHMgPSBNb2R1bGU7XG4iXSwibWFwcGluZ3MiOiJBQUFBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7QUFDQTtBQUNBO0FBQ0E7O0EiLCJzb3VyY2VSb290IjoiIn0=\n//# sourceURL=webpack-internal:///./src/encoderWorker.js\n");
 
 /***/ })
 
@@ -170,25 +171,13 @@ var quit_ = function(status, toThrow) {
 var ENVIRONMENT_IS_WEB = false;
 var ENVIRONMENT_IS_WORKER = false;
 var ENVIRONMENT_IS_NODE = false;
-var ENVIRONMENT_HAS_NODE = false;
 var ENVIRONMENT_IS_SHELL = false;
 ENVIRONMENT_IS_WEB = typeof window === 'object';
 ENVIRONMENT_IS_WORKER = typeof importScripts === 'function';
-// A web environment like Electron.js can have Node enabled, so we must
-// distinguish between Node-enabled environments and Node environments per se.
-// This will allow the former to do things like mount NODEFS.
-// Extended check using process.versions fixes issue #8816.
-// (Also makes redundant the original check that 'require' is a function.)
-ENVIRONMENT_HAS_NODE = typeof process === 'object' && typeof process.versions === 'object' && typeof process.versions.node === 'string';
-ENVIRONMENT_IS_NODE = ENVIRONMENT_HAS_NODE && !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_WORKER;
+// N.b. Electron.js environment is simultaneously a NODE-environment, but
+// also a web environment.
+ENVIRONMENT_IS_NODE = typeof process === 'object' && typeof process.versions === 'object' && typeof process.versions.node === 'string';
 ENVIRONMENT_IS_SHELL = !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_NODE && !ENVIRONMENT_IS_WORKER;
-
-
-
-// Three configurations we can be running in:
-// 1) We could be the application main() thread running in the main JS UI thread. (ENVIRONMENT_IS_WORKER == false and ENVIRONMENT_IS_PTHREAD == false)
-// 2) We could be the application main() thread proxied to worker. (with Emscripten -s PROXY_TO_WORKER=1) (ENVIRONMENT_IS_WORKER == true, ENVIRONMENT_IS_PTHREAD == false)
-// 3) We could be an application pthread running in a worker. (ENVIRONMENT_IS_WORKER == true and ENVIRONMENT_IS_PTHREAD == true)
 
 
 
@@ -208,21 +197,28 @@ var read_,
     readBinary,
     setWindowTitle;
 
-if (ENVIRONMENT_IS_NODE) {
-  scriptDirectory = __dirname + '/';
+var nodeFS;
+var nodePath;
 
-  // Expose functionality in the same simple way that the shells work
-  // Note that we pollute the global namespace here, otherwise we break in node
-  var nodeFS;
-  var nodePath;
+if (ENVIRONMENT_IS_NODE) {
+  if (ENVIRONMENT_IS_WORKER) {
+    scriptDirectory = require('path').dirname(scriptDirectory) + '/';
+  } else {
+    scriptDirectory = __dirname + '/';
+  }
+
+
+/**
+ * @license
+ * Copyright 2019 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
 
   read_ = function shell_read(filename, binary) {
-    var ret;
-      if (!nodeFS) nodeFS = require('fs');
-      if (!nodePath) nodePath = require('path');
-      filename = nodePath['normalize'](filename);
-      ret = nodeFS['readFileSync'](filename);
-    return binary ? ret : ret.toString();
+    if (!nodeFS) nodeFS = require('fs');
+    if (!nodePath) nodePath = require('path');
+    filename = nodePath['normalize'](filename);
+    return nodeFS['readFileSync'](filename, binary ? null : 'utf8');
   };
 
   readBinary = function readBinary(filename) {
@@ -233,6 +229,9 @@ if (ENVIRONMENT_IS_NODE) {
     assert(ret.buffer);
     return ret;
   };
+
+
+
 
   if (process['argv'].length > 1) {
     thisProgram = process['argv'][1].replace(/\\/g, '/');
@@ -258,6 +257,9 @@ if (ENVIRONMENT_IS_NODE) {
   };
 
   Module['inspect'] = function () { return '[Emscripten Module object]'; };
+
+
+
 } else
 if (ENVIRONMENT_IS_SHELL) {
 
@@ -292,11 +294,17 @@ if (ENVIRONMENT_IS_SHELL) {
 
   if (typeof print !== 'undefined') {
     // Prefer to use print/printErr where they exist, as they usually work better.
-    if (typeof console === 'undefined') console = {};
-    console.log = print;
-    console.warn = console.error = typeof printErr !== 'undefined' ? printErr : print;
+    if (typeof console === 'undefined') console = /** @type{!Console} */({});
+    console.log = /** @type{!function(this:Console, ...*): undefined} */ (print);
+    console.warn = console.error = /** @type{!function(this:Console, ...*): undefined} */ (typeof printErr !== 'undefined' ? printErr : print);
   }
+
+
 } else
+
+// Note that this includes Node.js workers when relevant (pthreads is enabled).
+// Node.js workers are detected as a combination of ENVIRONMENT_IS_WORKER and
+// ENVIRONMENT_IS_NODE.
 if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
   if (ENVIRONMENT_IS_WORKER) { // Check worker, not web, since window could be polyfilled
     scriptDirectory = self.location.href;
@@ -314,6 +322,17 @@ if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
   }
 
 
+  // Differentiate the Web Worker from the Node Worker case, as reading must
+  // be done differently.
+  {
+
+
+/**
+ * @license
+ * Copyright 2019 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
+
   read_ = function shell_read(url) {
       var xhr = new XMLHttpRequest();
       xhr.open('GET', url, false);
@@ -327,7 +346,7 @@ if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
         xhr.open('GET', url, false);
         xhr.responseType = 'arraybuffer';
         xhr.send(null);
-        return new Uint8Array(xhr.response);
+        return new Uint8Array(/** @type{!ArrayBuffer} */(xhr.response));
     };
   }
 
@@ -346,10 +365,16 @@ if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
     xhr.send(null);
   };
 
+
+
+
+  }
+
   setWindowTitle = function(title) { document.title = title };
 } else
 {
 }
+
 
 // Set up the out() and err() hooks, which are how we can print to stdout or
 // stderr, respectively.
@@ -376,14 +401,13 @@ if (Module['quit']) quit_ = Module['quit'];
 
 // perform assertions in shell.js after we set up out() and err(), as otherwise if an assertion fails it cannot print the message
 
-// TODO remove when SDL2 is fixed (also see above)
 
 
-
-// Copyright 2017 The Emscripten Authors.  All rights reserved.
-// Emscripten is available under two separate licenses, the MIT license and the
-// University of Illinois/NCSA Open Source License.  Both these licenses can be
-// found in the LICENSE file.
+/**
+ * @license
+ * Copyright 2017 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
 
 // {{PREAMBLE_ADDITIONS}}
 
@@ -393,9 +417,6 @@ var STACK_ALIGN = 16;
 function dynamicAlloc(size) {
   var ret = HEAP32[DYNAMICTOP_PTR>>2];
   var end = (ret + size + 15) & -16;
-  if (end > _emscripten_get_heap_size()) {
-    abort();
-  }
   HEAP32[DYNAMICTOP_PTR>>2] = end;
   return ret;
 }
@@ -417,7 +438,7 @@ function getNativeTypeSize(type) {
       if (type[type.length-1] === '*') {
         return 4; // A pointer
       } else if (type[0] === 'i') {
-        var bits = parseInt(type.substr(1));
+        var bits = Number(type.substr(1));
         assert(bits % 8 === 0, 'getNativeTypeSize invalid bits ' + bits + ', type ' + type);
         return bits / 8;
       } else {
@@ -435,24 +456,40 @@ function warnOnce(text) {
   }
 }
 
-var asm2wasmImports = { // special asm2wasm imports
-    "f64-rem": function(x, y) {
-        return x % y;
-    },
-    "debugger": function() {
-    }
-};
 
 
 
-var jsCallStartIndex = 1;
-var functionPointers = new Array(0);
+
+/**
+ * @license
+ * Copyright 2020 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
+
 
 // Wraps a JS function as a wasm function with a given signature.
-// In the future, we may get a WebAssembly.Function constructor. Until then,
-// we create a wasm module that takes the JS function as an import with a given
-// signature, and re-exports that as a wasm function.
 function convertJsFunctionToWasm(func, sig) {
+
+  // If the type reflection proposal is available, use the new
+  // "WebAssembly.Function" constructor.
+  // Otherwise, construct a minimal wasm module importing the JS function and
+  // re-exporting it.
+  if (typeof WebAssembly.Function === "function") {
+    var typeNames = {
+      'i': 'i32',
+      'j': 'i64',
+      'f': 'f32',
+      'd': 'f64'
+    };
+    var type = {
+      parameters: [],
+      results: sig[0] == 'v' ? [] : [typeNames[sig[0]]]
+    };
+    for (var i = 1; i < sig.length; ++i) {
+      type.parameters.push(typeNames[sig[i]]);
+    }
+    return new WebAssembly.Function(type, func);
+  }
 
   // The module is static, with the exception of the type section, which is
   // generated based on the signature passed in.
@@ -506,35 +543,65 @@ function convertJsFunctionToWasm(func, sig) {
   // This accepts an import (at "e.f"), that it reroutes to an export (at "f")
   var module = new WebAssembly.Module(bytes);
   var instance = new WebAssembly.Instance(module, {
-    e: {
-      f: func
+    'e': {
+      'f': func
     }
   });
-  var wrappedFunc = instance.exports.f;
+  var wrappedFunc = instance.exports['f'];
   return wrappedFunc;
 }
+
+var freeTableIndexes = [];
+
+// Weak map of functions in the table to their indexes, created on first use.
+var functionsInTableMap;
 
 // Add a wasm function to the table.
 function addFunctionWasm(func, sig) {
   var table = wasmTable;
-  var ret = table.length;
 
-  // Grow the table
-  try {
-    table.grow(1);
-  } catch (err) {
-    if (!err instanceof RangeError) {
-      throw err;
+  // Check if the function is already in the table, to ensure each function
+  // gets a unique index. First, create the map if this is the first use.
+  if (!functionsInTableMap) {
+    functionsInTableMap = new WeakMap();
+    for (var i = 0; i < table.length; i++) {
+      var item = table.get(i);
+      // Ignore null values.
+      if (item) {
+        functionsInTableMap.set(item, i);
+      }
     }
-    throw 'Unable to grow wasm table. Use a higher value for RESERVED_FUNCTION_POINTERS or set ALLOW_TABLE_GROWTH.';
+  }
+  if (functionsInTableMap.has(func)) {
+    return functionsInTableMap.get(func);
   }
 
-  // Insert new element
+  // It's not in the table, add it now.
+
+
+  var ret;
+  // Reuse a free index if there is one, otherwise grow.
+  if (freeTableIndexes.length) {
+    ret = freeTableIndexes.pop();
+  } else {
+    ret = table.length;
+    // Grow the table
+    try {
+      table.grow(1);
+    } catch (err) {
+      if (!(err instanceof RangeError)) {
+        throw err;
+      }
+      throw 'Unable to grow wasm table. Set ALLOW_TABLE_GROWTH.';
+    }
+  }
+
+  // Set the new value.
   try {
     // Attempting to call this with JS function will cause of table.set() to fail
     table.set(ret, func);
   } catch (err) {
-    if (!err instanceof TypeError) {
+    if (!(err instanceof TypeError)) {
       throw err;
     }
     assert(typeof sig !== 'undefined', 'Missing signature argument to addFunction');
@@ -542,33 +609,28 @@ function addFunctionWasm(func, sig) {
     table.set(ret, wrapped);
   }
 
+  functionsInTableMap.set(func, ret);
+
   return ret;
 }
 
 function removeFunctionWasm(index) {
-  // TODO(sbc): Look into implementing this to allow re-using of table slots
+  functionsInTableMap.delete(wasmTable.get(index));
+  freeTableIndexes.push(index);
 }
 
 // 'sig' parameter is required for the llvm backend but only when func is not
 // already a WebAssembly function.
 function addFunction(func, sig) {
 
-
-  var base = 0;
-  for (var i = base; i < base + 0; i++) {
-    if (!functionPointers[i]) {
-      functionPointers[i] = func;
-      return jsCallStartIndex + i;
-    }
-  }
-  throw 'Finished up all reserved function pointers. Use a higher value for RESERVED_FUNCTION_POINTERS.';
-
+  return addFunctionWasm(func, sig);
 }
 
 function removeFunction(index) {
-
-  functionPointers[index-jsCallStartIndex] = null;
+  removeFunctionWasm(index);
 }
+
+
 
 var funcWrappers = {};
 
@@ -600,10 +662,20 @@ function getFuncWrapper(func, sig) {
 }
 
 
+/**
+ * @license
+ * Copyright 2020 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
+
+
+
+
 function makeBigInt(low, high, unsigned) {
   return unsigned ? ((+((low>>>0)))+((+((high>>>0)))*4294967296.0)) : ((+((low>>>0)))+((+((high|0)))*4294967296.0));
 }
 
+/** @param {Array=} args */
 function dynCall(sig, ptr, args) {
   if (args && args.length) {
     return Module['dynCall_' + sig].apply(null, [ptr].concat(args));
@@ -623,9 +695,6 @@ var getTempRet0 = function() {
 };
 
 
-var Runtime = {
-};
-
 // The address globals begin at. Very low in memory, for code size and optimization opportunities.
 // Above 0 is static memory, starting with globals.
 // Then the stack.
@@ -634,6 +703,11 @@ var GLOBAL_BASE = 1024;
 
 
 
+/**
+ * @license
+ * Copyright 2010 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
 
 // === Preamble library stuff ===
 
@@ -655,10 +729,19 @@ if (typeof WebAssembly !== 'object') {
 }
 
 
+/**
+ * @license
+ * Copyright 2019 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
+
 // In MINIMAL_RUNTIME, setValue() and getValue() are only available when building with safe heap enabled, for heap safety checking.
 // In traditional runtime, setValue() and getValue() are always available (although their use is highly discouraged due to perf penalties)
 
-/** @type {function(number, number, string, boolean=)} */
+/** @param {number} ptr
+    @param {number} value
+    @param {string} type
+    @param {number|boolean=} noSafe */
 function setValue(ptr, value, type, noSafe) {
   type = type || 'i8';
   if (type.charAt(type.length-1) === '*') type = 'i32'; // pointers are 32-bit
@@ -674,7 +757,9 @@ function setValue(ptr, value, type, noSafe) {
     }
 }
 
-/** @type {function(number, string, boolean=)} */
+/** @param {number} ptr
+    @param {string} type
+    @param {number|boolean=} noSafe */
 function getValue(ptr, type, noSafe) {
   type = type || 'i8';
   if (type.charAt(type.length-1) === '*') type = 'i32'; // pointers are 32-bit
@@ -703,8 +788,8 @@ var wasmMemory;
 // In the wasm backend, we polyfill the WebAssembly object,
 // so this creates a (non-native-wasm) table for us.
 var wasmTable = new WebAssembly.Table({
-  'initial': 16,
-  'maximum': 16,
+  'initial': 10,
+  'maximum': 10 + 0,
   'element': 'anyfunc'
 });
 
@@ -737,6 +822,10 @@ function getCFunc(ident) {
 }
 
 // C calling interface.
+/** @param {string|null=} returnType
+    @param {Array=} argTypes
+    @param {Arguments|Array=} args
+    @param {Object=} opts */
 function ccall(ident, returnType, argTypes, args, opts) {
   // For fast lookup of conversion functions
   var toC = {
@@ -784,6 +873,9 @@ function ccall(ident, returnType, argTypes, args, opts) {
   return ret;
 }
 
+/** @param {string=} returnType
+    @param {Array=} argTypes
+    @param {Object=} opts */
 function cwrap(ident, returnType, argTypes, opts) {
   argTypes = argTypes || [];
   // When the function takes numbers and returns a number, we can just return
@@ -894,32 +986,13 @@ function getMemory(size) {
 }
 
 
+/**
+ * @license
+ * Copyright 2019 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
 
-
-/** @type {function(number, number=)} */
-function Pointer_stringify(ptr, length) {
-  abort("this function has been removed - you should use UTF8ToString(ptr, maxBytesToRead) instead!");
-}
-
-// Given a pointer 'ptr' to a null-terminated ASCII-encoded string in the emscripten HEAP, returns
-// a copy of that string as a Javascript String object.
-
-function AsciiToString(ptr) {
-  var str = '';
-  while (1) {
-    var ch = HEAPU8[((ptr++)>>0)];
-    if (!ch) return str;
-    str += String.fromCharCode(ch);
-  }
-}
-
-// Copies the given Javascript String object 'str' to the emscripten HEAP at address 'outPtr',
-// null-terminated and encoded in ASCII form. The copy will require at most str.length+1 bytes of space in the HEAP.
-
-function stringToAscii(str, outPtr) {
-  return writeAsciiToMemory(str, outPtr, false);
-}
-
+// runtime_strings.js: Strings related runtime functions that are part of both MINIMAL_RUNTIME and regular runtime.
 
 // Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the given array that contains uint8 values, returns
 // a copy of that string as a Javascript String object.
@@ -931,16 +1004,16 @@ var UTF8Decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf8') :
  * @param {number=} maxBytesToRead
  * @return {string}
  */
-function UTF8ArrayToString(u8Array, idx, maxBytesToRead) {
+function UTF8ArrayToString(heap, idx, maxBytesToRead) {
   var endIdx = idx + maxBytesToRead;
   var endPtr = idx;
   // TextDecoder needs to know the byte length in advance, it doesn't stop on null terminator by itself.
   // Also, use the length info to avoid running tiny strings through TextDecoder, since .subarray() allocates garbage.
   // (As a tiny code save trick, compare endPtr against endIdx using a negation, so that undefined means Infinity)
-  while (u8Array[endPtr] && !(endPtr >= endIdx)) ++endPtr;
+  while (heap[endPtr] && !(endPtr >= endIdx)) ++endPtr;
 
-  if (endPtr - idx > 16 && u8Array.subarray && UTF8Decoder) {
-    return UTF8Decoder.decode(u8Array.subarray(idx, endPtr));
+  if (endPtr - idx > 16 && heap.subarray && UTF8Decoder) {
+    return UTF8Decoder.decode(heap.subarray(idx, endPtr));
   } else {
     var str = '';
     // If building with TextDecoder, we have already computed the string length above, so test loop end condition against that
@@ -949,15 +1022,15 @@ function UTF8ArrayToString(u8Array, idx, maxBytesToRead) {
       // http://en.wikipedia.org/wiki/UTF-8#Description
       // https://www.ietf.org/rfc/rfc2279.txt
       // https://tools.ietf.org/html/rfc3629
-      var u0 = u8Array[idx++];
+      var u0 = heap[idx++];
       if (!(u0 & 0x80)) { str += String.fromCharCode(u0); continue; }
-      var u1 = u8Array[idx++] & 63;
+      var u1 = heap[idx++] & 63;
       if ((u0 & 0xE0) == 0xC0) { str += String.fromCharCode(((u0 & 31) << 6) | u1); continue; }
-      var u2 = u8Array[idx++] & 63;
+      var u2 = heap[idx++] & 63;
       if ((u0 & 0xF0) == 0xE0) {
         u0 = ((u0 & 15) << 12) | (u1 << 6) | u2;
       } else {
-        u0 = ((u0 & 7) << 18) | (u1 << 12) | (u2 << 6) | (u8Array[idx++] & 63);
+        u0 = ((u0 & 7) << 18) | (u1 << 12) | (u2 << 6) | (heap[idx++] & 63);
       }
 
       if (u0 < 0x10000) {
@@ -995,7 +1068,7 @@ function UTF8ToString(ptr, maxBytesToRead) {
 // Use the function lengthBytesUTF8 to compute the exact number of bytes (excluding null terminator) that this function will write.
 // Parameters:
 //   str: the Javascript string to copy.
-//   outU8Array: the array to copy to. Each index in this array is assumed to be one 8-byte element.
+//   heap: the array to copy to. Each index in this array is assumed to be one 8-byte element.
 //   outIdx: The starting offset in the array to begin the copying.
 //   maxBytesToWrite: The maximum number of bytes this function can write to the array.
 //                    This count should include the null terminator,
@@ -1003,7 +1076,7 @@ function UTF8ToString(ptr, maxBytesToRead) {
 //                    maxBytesToWrite=0 does not write any bytes to the output, not even the null terminator.
 // Returns the number of bytes written, EXCLUDING the null terminator.
 
-function stringToUTF8Array(str, outU8Array, outIdx, maxBytesToWrite) {
+function stringToUTF8Array(str, heap, outIdx, maxBytesToWrite) {
   if (!(maxBytesToWrite > 0)) // Parameter maxBytesToWrite is not optional. Negative values, 0, null, undefined and false each don't write out any bytes.
     return 0;
 
@@ -1020,26 +1093,26 @@ function stringToUTF8Array(str, outU8Array, outIdx, maxBytesToWrite) {
     }
     if (u <= 0x7F) {
       if (outIdx >= endIdx) break;
-      outU8Array[outIdx++] = u;
+      heap[outIdx++] = u;
     } else if (u <= 0x7FF) {
       if (outIdx + 1 >= endIdx) break;
-      outU8Array[outIdx++] = 0xC0 | (u >> 6);
-      outU8Array[outIdx++] = 0x80 | (u & 63);
+      heap[outIdx++] = 0xC0 | (u >> 6);
+      heap[outIdx++] = 0x80 | (u & 63);
     } else if (u <= 0xFFFF) {
       if (outIdx + 2 >= endIdx) break;
-      outU8Array[outIdx++] = 0xE0 | (u >> 12);
-      outU8Array[outIdx++] = 0x80 | ((u >> 6) & 63);
-      outU8Array[outIdx++] = 0x80 | (u & 63);
+      heap[outIdx++] = 0xE0 | (u >> 12);
+      heap[outIdx++] = 0x80 | ((u >> 6) & 63);
+      heap[outIdx++] = 0x80 | (u & 63);
     } else {
       if (outIdx + 3 >= endIdx) break;
-      outU8Array[outIdx++] = 0xF0 | (u >> 18);
-      outU8Array[outIdx++] = 0x80 | ((u >> 12) & 63);
-      outU8Array[outIdx++] = 0x80 | ((u >> 6) & 63);
-      outU8Array[outIdx++] = 0x80 | (u & 63);
+      heap[outIdx++] = 0xF0 | (u >> 18);
+      heap[outIdx++] = 0x80 | ((u >> 12) & 63);
+      heap[outIdx++] = 0x80 | ((u >> 6) & 63);
+      heap[outIdx++] = 0x80 | (u & 63);
     }
   }
   // Null-terminate the pointer to the buffer.
-  outU8Array[outIdx] = 0;
+  heap[outIdx] = 0;
   return outIdx - startIdx;
 }
 
@@ -1069,10 +1142,39 @@ function lengthBytesUTF8(str) {
 }
 
 
+
+/**
+ * @license
+ * Copyright 2020 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
+
+// runtime_strings_extra.js: Strings related runtime functions that are available only in regular runtime.
+
+// Given a pointer 'ptr' to a null-terminated ASCII-encoded string in the emscripten HEAP, returns
+// a copy of that string as a Javascript String object.
+
+function AsciiToString(ptr) {
+  var str = '';
+  while (1) {
+    var ch = HEAPU8[((ptr++)>>0)];
+    if (!ch) return str;
+    str += String.fromCharCode(ch);
+  }
+}
+
+// Copies the given Javascript String object 'str' to the emscripten HEAP at address 'outPtr',
+// null-terminated and encoded in ASCII form. The copy will require at most str.length+1 bytes of space in the HEAP.
+
+function stringToAscii(str, outPtr) {
+  return writeAsciiToMemory(str, outPtr, false);
+}
+
 // Given a pointer 'ptr' to a null-terminated UTF16LE-encoded string in the emscripten HEAP, returns
 // a copy of that string as a Javascript String object.
 
 var UTF16Decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf-16le') : undefined;
+
 function UTF16ToString(ptr) {
   var endPtr = ptr;
   // TextDecoder needs to know the byte length in advance, it doesn't stop on null terminator by itself.
@@ -1140,8 +1242,7 @@ function UTF32ToString(ptr) {
   var str = '';
   while (1) {
     var utf32 = HEAP32[(((ptr)+(i*4))>>2)];
-    if (utf32 == 0)
-      return str;
+    if (utf32 == 0) return str;
     ++i;
     // Gotcha: fromCharCode constructs a character from a UTF-16 encoded code (pair), not from a Unicode code point! So encode the code point to UTF-16 for constructing.
     // See http://unicode.org/faq/utf_bom.html#utf16-3
@@ -1226,7 +1327,8 @@ function allocateUTF8OnStack(str) {
 // a maximum length limit of how many bytes it is allowed to write. Prefer calling the
 // function stringToUTF8Array() instead, which takes in a maximum length that can be used
 // to be secure from out of bounds writes.
-/** @deprecated */
+/** @deprecated
+    @param {boolean=} dontAddNull */
 function writeStringToMemory(string, buffer, dontAddNull) {
   warnOnce('writeStringToMemory is deprecated and should not be called! Use stringToUTF8() instead!');
 
@@ -1246,6 +1348,7 @@ function writeArrayToMemory(array, buffer) {
   HEAP8.set(array, buffer);
 }
 
+/** @param {boolean=} dontAddNull */
 function writeAsciiToMemory(str, buffer, dontAddNull) {
   for (var i = 0; i < str.length; ++i) {
     HEAP8[((buffer++)>>0)]=str.charCodeAt(i);
@@ -1253,7 +1356,6 @@ function writeAsciiToMemory(str, buffer, dontAddNull) {
   // Null-terminate the pointer to the HEAP.
   if (!dontAddNull) HEAP8[((buffer)>>0)]=0;
 }
-
 
 
 
@@ -1302,29 +1404,40 @@ function updateGlobalBufferAndViews(buf) {
   Module['HEAPF64'] = HEAPF64 = new Float64Array(buf);
 }
 
-
 var STATIC_BASE = 1024,
-    STACK_BASE = 46720,
+    STACK_BASE = 5296544,
     STACKTOP = STACK_BASE,
-    STACK_MAX = 5289600,
-    DYNAMIC_BASE = 5289600,
-    DYNAMICTOP_PTR = 46512;
+    STACK_MAX = 53664,
+    DYNAMIC_BASE = 5296544,
+    DYNAMICTOP_PTR = 53504;
 
 
 
 
 var TOTAL_STACK = 5242880;
 
-var INITIAL_TOTAL_MEMORY = Module['TOTAL_MEMORY'] || 16777216;
+var INITIAL_INITIAL_MEMORY = Module['INITIAL_MEMORY'] || 16777216;
 
 
 
+
+/**
+ * @license
+ * Copyright 2019 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
 
 
 
 
 // In standalone mode, the wasm creates the memory, and the user can't provide it.
 // In non-standalone/normal mode, we create the memory here.
+
+/**
+ * @license
+ * Copyright 2019 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
 
 // Create the main memory. (Note: this isn't used in STANDALONE_WASM mode since the wasm
 // memory is created in the wasm, not in JS.)
@@ -1334,9 +1447,9 @@ var INITIAL_TOTAL_MEMORY = Module['TOTAL_MEMORY'] || 16777216;
   } else
   {
     wasmMemory = new WebAssembly.Memory({
-      'initial': INITIAL_TOTAL_MEMORY / WASM_PAGE_SIZE
+      'initial': INITIAL_INITIAL_MEMORY / WASM_PAGE_SIZE
       ,
-      'maximum': INITIAL_TOTAL_MEMORY / WASM_PAGE_SIZE
+      'maximum': INITIAL_INITIAL_MEMORY / WASM_PAGE_SIZE
     });
   }
 
@@ -1346,8 +1459,8 @@ if (wasmMemory) {
 }
 
 // If the user provides an incorrect length, just use that length instead rather than providing the user to
-// specifically provide the memory length with Module['TOTAL_MEMORY'].
-INITIAL_TOTAL_MEMORY = buffer.byteLength;
+// specifically provide the memory length with Module['INITIAL_MEMORY'].
+INITIAL_INITIAL_MEMORY = buffer.byteLength;
 updateGlobalBufferAndViews(buffer);
 
 HEAP32[DYNAMICTOP_PTR>>2] = DYNAMIC_BASE;
@@ -1355,8 +1468,20 @@ HEAP32[DYNAMICTOP_PTR>>2] = DYNAMIC_BASE;
 
 
 
+/**
+ * @license
+ * Copyright 2019 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
 
 
+
+
+/**
+ * @license
+ * Copyright 2019 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
 
 
 
@@ -1365,7 +1490,7 @@ function callRuntimeCallbacks(callbacks) {
   while(callbacks.length > 0) {
     var callback = callbacks.shift();
     if (typeof callback == 'function') {
-      callback();
+      callback(Module); // Pass the module as the first argument.
       continue;
     }
     var func = callback.func;
@@ -1449,6 +1574,7 @@ function addOnPostRun(cb) {
   __ATPOSTRUN__.unshift(cb);
 }
 
+/** @param {number|boolean=} ignore */
 function unSign(value, bits, ignore) {
   if (value >= 0) {
     return value;
@@ -1456,6 +1582,7 @@ function unSign(value, bits, ignore) {
   return bits <= 32 ? 2*Math.abs(1 << (bits-1)) + value // Need some trickery, since if bits == 32, we are right at the limit of the bits JS uses in bitshifts
                     : Math.pow(2, bits)         + value;
 }
+/** @param {number|boolean=} ignore */
 function reSign(value, bits, ignore) {
   if (value <= 0) {
     return value;
@@ -1470,6 +1597,20 @@ function reSign(value, bits, ignore) {
   return value;
 }
 
+
+/**
+ * @license
+ * Copyright 2019 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
+
+// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math/imul
+
+// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math/fround
+
+// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math/clz32
+
+// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math/trunc
 
 
 var Math_abs = Math.abs;
@@ -1544,6 +1685,7 @@ Module["preloadedImages"] = {}; // maps url to image data
 Module["preloadedAudios"] = {}; // maps url to audio data
 
 
+/** @param {string|number=} what */
 function abort(what) {
   if (Module['onAbort']) {
     Module['onAbort'](what);
@@ -1556,33 +1698,56 @@ function abort(what) {
   ABORT = true;
   EXITSTATUS = 1;
 
-  throw 'abort(' + what + '). Build with -s ASSERTIONS=1 for more info.';
+  what = 'abort(' + what + '). Build with -s ASSERTIONS=1 for more info.';
+
+  // Throw a wasm runtime error, because a JS error might be seen as a foreign
+  // exception, which means we'd run destructors on it. We need the error to
+  // simply make the program stop.
+  throw new WebAssembly.RuntimeError(what);
 }
 
 
 var memoryInitializer = null;
 
 
+/**
+ * @license
+ * Copyright 2015 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
 
 
 
 
 
-// Copyright 2017 The Emscripten Authors.  All rights reserved.
-// Emscripten is available under two separate licenses, the MIT license and the
-// University of Illinois/NCSA Open Source License.  Both these licenses can be
-// found in the LICENSE file.
+
+
+/**
+ * @license
+ * Copyright 2017 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
+
+function hasPrefix(str, prefix) {
+  return String.prototype.startsWith ?
+      str.startsWith(prefix) :
+      str.indexOf(prefix) === 0;
+}
 
 // Prefix of data URIs emitted by SINGLE_FILE and related options.
 var dataURIPrefix = 'data:application/octet-stream;base64,';
 
 // Indicates whether filename is a base64 data URI.
 function isDataURI(filename) {
-  return String.prototype.startsWith ?
-      filename.startsWith(dataURIPrefix) :
-      filename.indexOf(dataURIPrefix) === 0;
+  return hasPrefix(filename, dataURIPrefix);
 }
 
+var fileURIPrefix = "file://";
+
+// Indicates whether filename is delivered via file protocol (as opposed to http/https)
+function isFileURI(filename) {
+  return hasPrefix(filename, fileURIPrefix);
+}
 
 
 
@@ -1609,9 +1774,12 @@ function getBinary() {
 }
 
 function getBinaryPromise() {
-  // if we don't have the binary yet, and have the Fetch api, use that
+  // If we don't have the binary yet, and have the Fetch api, use that;
   // in some environments, like Electron's render process, Fetch api may be present, but have a different context than expected, let's only use it on the Web
-  if (!wasmBinary && (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) && typeof fetch === 'function') {
+  if (!wasmBinary && (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) && typeof fetch === 'function'
+      // Let's not use fetch to get objects over file:// as it's most likely Cordova which doesn't support fetch for file://
+      && !isFileURI(wasmBinaryFile)
+      ) {
     return fetch(wasmBinaryFile, { credentials: 'same-origin' }).then(function(response) {
       if (!response['ok']) {
         throw "failed to load wasm binary file at '" + wasmBinaryFile + "'";
@@ -1635,32 +1803,26 @@ function createWasm() {
   // prepare imports
   var info = {
     'env': asmLibraryArg,
-    'wasi_unstable': asmLibraryArg
-    ,
-    'global': {
-      'NaN': NaN,
-      'Infinity': Infinity
-    },
-    'global.Math': Math,
-    'asm2wasm': asm2wasmImports
+    'wasi_snapshot_preview1': asmLibraryArg
   };
   // Load the wasm module and create an instance of using native support in the JS engine.
   // handle a generated wasm instance, receiving its exports and
   // performing other necessary setup
+  /** @param {WebAssembly.Module=} module*/
   function receiveInstance(instance, module) {
     var exports = instance.exports;
     Module['asm'] = exports;
     removeRunDependency('wasm-instantiate');
   }
-   // we can't run yet (except in a pthread, where we have a custom sync instantiator)
+  // we can't run yet (except in a pthread, where we have a custom sync instantiator)
   addRunDependency('wasm-instantiate');
 
 
   function receiveInstantiatedSource(output) {
     // 'output' is a WebAssemblyInstantiatedSource object which has both the module and instance.
     // receiveInstance() will swap in the exports (to Module.asm) so they can be called
-      // TODO: Due to Closure regression https://github.com/google/closure-compiler/issues/3193, the above line no longer optimizes out down to the following line.
-      // When the regression is fixed, can restore the above USE_PTHREADS-enabled path.
+    // TODO: Due to Closure regression https://github.com/google/closure-compiler/issues/3193, the above line no longer optimizes out down to the following line.
+    // When the regression is fixed, can restore the above USE_PTHREADS-enabled path.
     receiveInstance(output['instance']);
   }
 
@@ -1679,6 +1841,8 @@ function createWasm() {
     if (!wasmBinary &&
         typeof WebAssembly.instantiateStreaming === 'function' &&
         !isDataURI(wasmBinaryFile) &&
+        // Don't use streaming for file:// delivered objects in a webview, fetch them synchronously.
+        !isFileURI(wasmBinaryFile) &&
         typeof fetch === 'function') {
       fetch(wasmBinaryFile, { credentials: 'same-origin' }).then(function (response) {
         var result = WebAssembly.instantiateStreaming(response, info);
@@ -1711,7 +1875,6 @@ function createWasm() {
   return {}; // no exports yet; we'll fill them in later
 }
 
-Module['asm'] = createWasm;
 
 // Globals used by JS i64 conversions
 var tempDouble;
@@ -1719,43 +1882,20 @@ var tempI64;
 
 // === Body ===
 
-var ASM_CONSTS = [];
+var ASM_CONSTS = {
+  
+};
 
 
 
 
-
-// STATICTOP = STATIC_BASE + 45696;
-/* global initializers */ /*__ATINIT__.push();*/
-
-
-
-
+// STATICTOP = STATIC_BASE + 52640;
+/* global initializers */  __ATINIT__.push({ func: function() { ___wasm_call_ctors() } });
 
 
 
 
 /* no memory initializer */
-var tempDoublePtr = 46704
-
-function copyTempFloat(ptr) { // functions, because inlining this code increases code size too much
-  HEAP8[tempDoublePtr] = HEAP8[ptr];
-  HEAP8[tempDoublePtr+1] = HEAP8[ptr+1];
-  HEAP8[tempDoublePtr+2] = HEAP8[ptr+2];
-  HEAP8[tempDoublePtr+3] = HEAP8[ptr+3];
-}
-
-function copyTempDouble(ptr) {
-  HEAP8[tempDoublePtr] = HEAP8[ptr];
-  HEAP8[tempDoublePtr+1] = HEAP8[ptr+1];
-  HEAP8[tempDoublePtr+2] = HEAP8[ptr+2];
-  HEAP8[tempDoublePtr+3] = HEAP8[ptr+3];
-  HEAP8[tempDoublePtr+4] = HEAP8[ptr+4];
-  HEAP8[tempDoublePtr+5] = HEAP8[ptr+5];
-  HEAP8[tempDoublePtr+6] = HEAP8[ptr+6];
-  HEAP8[tempDoublePtr+7] = HEAP8[ptr+7];
-}
-
 // {{PRE_LIBRARY}}
 
 
@@ -1765,7 +1905,7 @@ function copyTempDouble(ptr) {
 
   function demangleAll(text) {
       var regex =
-        /\b__Z[\w\d_]+/g;
+        /\b_Z[\w\d_]+/g;
       return text.replace(regex,
         function(x) {
           var y = demangle(x);
@@ -1779,7 +1919,7 @@ function copyTempDouble(ptr) {
         // IE10+ special cases: It does have callstack info, but it is only populated if an Error object is thrown,
         // so try that as a special-case.
         try {
-          throw new Error(0);
+          throw new Error();
         } catch(e) {
           err = e;
         }
@@ -1796,7 +1936,30 @@ function copyTempDouble(ptr) {
       return demangleAll(js);
     }
 
+  function _abort() {
+      abort();
+    }
+
+  function _emscripten_get_sbrk_ptr() {
+      return 53504;
+    }
+
+  function _emscripten_memcpy_big(dest, src, num) {
+      HEAPU8.copyWithin(dest, src, src + num);
+    }
+
   
+  function _emscripten_get_heap_size() {
+      return HEAPU8.length;
+    }
+  
+  function abortOnCannotGrowMemory(requestedSize) {
+      abort('OOM');
+    }function _emscripten_resize_heap(requestedSize) {
+      requestedSize = requestedSize >>> 0;
+      abortOnCannotGrowMemory(requestedSize);
+    }
+
   
   
   var PATH={splitPath:function(filename) {
@@ -1864,7 +2027,7 @@ function copyTempDouble(ptr) {
         return PATH.normalize(paths.join('/'));
       },join2:function(l, r) {
         return PATH.normalize(l + '/' + r);
-      }};var SYSCALLS={buffers:[null,[],[]],printChar:function(stream, curr) {
+      }};var SYSCALLS={mappings:{},buffers:[null,[],[]],printChar:function(stream, curr) {
         var buffer = SYSCALLS.buffers[stream];
         if (curr === 0 || curr === 10) {
           (stream === 1 ? out : err)(UTF8ArrayToString(buffer, 0));
@@ -1872,54 +2035,30 @@ function copyTempDouble(ptr) {
         } else {
           buffer.push(curr);
         }
-      },varargs:0,get:function(varargs) {
+      },varargs:undefined,get:function() {
         SYSCALLS.varargs += 4;
         var ret = HEAP32[(((SYSCALLS.varargs)-(4))>>2)];
         return ret;
-      },getStr:function() {
-        var ret = UTF8ToString(SYSCALLS.get());
+      },getStr:function(ptr) {
+        var ret = UTF8ToString(ptr);
         return ret;
-      },get64:function() {
-        var low = SYSCALLS.get(), high = SYSCALLS.get();
+      },get64:function(low, high) {
         return low;
-      },getZero:function() {
-        SYSCALLS.get();
-      }};function _fd_close(fd) {try {
-  
+      }};function _fd_close(fd) {
       return 0;
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return e.errno;
-  }
-  }function ___wasi_fd_close(
-  ) {
-  return _fd_close.apply(null, arguments)
+    }
+
+  function _fd_seek(fd, offset_low, offset_high, whence, newOffset) {
   }
 
-  
-  function _fd_seek(fd, offset_low, offset_high, whence, newOffset) {try {
-  
-      return 0;
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return e.errno;
-  }
-  }function ___wasi_fd_seek(
-  ) {
-  return _fd_seek.apply(null, arguments)
-  }
-
-  
   
   function flush_NO_FILESYSTEM() {
       // flush anything remaining in the buffers during shutdown
-      var fflush = Module["_fflush"];
-      if (fflush) fflush(0);
+      if (typeof _fflush !== 'undefined') _fflush(0);
       var buffers = SYSCALLS.buffers;
       if (buffers[1].length) SYSCALLS.printChar(1, 10);
       if (buffers[2].length) SYSCALLS.printChar(2, 10);
-    }function _fd_write(fd, iov, iovcnt, pnum) {try {
-  
+    }function _fd_write(fd, iov, iovcnt, pnum) {
       // hack to support printf in SYSCALLS_REQUIRE_FILESYSTEM=0
       var num = 0;
       for (var i = 0; i < iovcnt; i++) {
@@ -1932,84 +2071,18 @@ function copyTempDouble(ptr) {
       }
       HEAP32[((pnum)>>2)]=num
       return 0;
-    } catch (e) {
-    if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
-    return e.errno;
-  }
-  }function ___wasi_fd_write(
-  ) {
-  return _fd_write.apply(null, arguments)
-  }
-
-  function _abort() {
-      abort();
     }
 
-  function _emscripten_get_heap_size() {
-      return HEAP8.length;
+  function _setTempRet0($i) {
+      setTempRet0(($i) | 0);
     }
-
-   
-
-  
-  function abortOnCannotGrowMemory(requestedSize) {
-      abort('OOM');
-    }function _emscripten_resize_heap(requestedSize) {
-      abortOnCannotGrowMemory(requestedSize);
-    }
-
-  
-  function _llvm_exp2_f32(x) {
-      return Math.pow(2, x);
-    }function _llvm_exp2_f64(a0
-  ) {
-  return _llvm_exp2_f32(a0);
-  }
-
-  
-  function _llvm_log10_f32(x) {
-      return Math.log(x) / Math.LN10; // TODO: Math.log10, when browser support is there
-    }function _llvm_log10_f64(a0
-  ) {
-  return _llvm_log10_f32(a0);
-  }
-
-  function _llvm_stackrestore(p) {
-      var self = _llvm_stacksave;
-      var ret = self.LLVM_SAVEDSTACKS[p];
-      self.LLVM_SAVEDSTACKS.splice(p, 1);
-      stackRestore(ret);
-    }
-
-  function _llvm_stacksave() {
-      var self = _llvm_stacksave;
-      if (!self.LLVM_SAVEDSTACKS) {
-        self.LLVM_SAVEDSTACKS = [];
-      }
-      self.LLVM_SAVEDSTACKS.push(stackSave());
-      return self.LLVM_SAVEDSTACKS.length-1;
-    }
-
-  
-  function _emscripten_memcpy_big(dest, src, num) {
-      HEAPU8.set(HEAPU8.subarray(src, src+num), dest);
-    }
-  
-   
-
-   
-
-   
-
-  
-  
-    
 var ASSERTIONS = false;
 
-// Copyright 2017 The Emscripten Authors.  All rights reserved.
-// Emscripten is available under two separate licenses, the MIT license and the
-// University of Illinois/NCSA Open Source License.  Both these licenses can be
-// found in the LICENSE file.
+/**
+ * @license
+ * Copyright 2017 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
 
 /** @type {function(string, boolean=, number=)} */
 function intArrayFromString(stringy, dontAddNull, length) {
@@ -2036,115 +2109,175 @@ function intArrayToString(array) {
 }
 
 
-// ASM_LIBRARY EXTERN PRIMITIVES: Int8Array,Int32Array,Math_floor,Math_ceil
-
-
 var asmGlobalArg = {};
-
-var asmLibraryArg = { "___wasi_fd_close": ___wasi_fd_close, "___wasi_fd_seek": ___wasi_fd_seek, "___wasi_fd_write": ___wasi_fd_write, "__memory_base": 1024, "__table_base": 0, "_abort": _abort, "_emscripten_get_heap_size": _emscripten_get_heap_size, "_emscripten_memcpy_big": _emscripten_memcpy_big, "_emscripten_resize_heap": _emscripten_resize_heap, "_fd_close": _fd_close, "_fd_seek": _fd_seek, "_fd_write": _fd_write, "_llvm_exp2_f32": _llvm_exp2_f32, "_llvm_exp2_f64": _llvm_exp2_f64, "_llvm_log10_f32": _llvm_log10_f32, "_llvm_log10_f64": _llvm_log10_f64, "_llvm_stackrestore": _llvm_stackrestore, "_llvm_stacksave": _llvm_stacksave, "abort": abort, "abortOnCannotGrowMemory": abortOnCannotGrowMemory, "demangle": demangle, "demangleAll": demangleAll, "flush_NO_FILESYSTEM": flush_NO_FILESYSTEM, "getTempRet0": getTempRet0, "jsStackTrace": jsStackTrace, "memory": wasmMemory, "setTempRet0": setTempRet0, "stackTrace": stackTrace, "table": wasmTable, "tempDoublePtr": tempDoublePtr };
-// EMSCRIPTEN_START_ASM
-var asm =Module["asm"]// EMSCRIPTEN_END_ASM
-(asmGlobalArg, asmLibraryArg, buffer);
-
+var asmLibraryArg = { "abort": _abort, "emscripten_get_sbrk_ptr": _emscripten_get_sbrk_ptr, "emscripten_memcpy_big": _emscripten_memcpy_big, "emscripten_resize_heap": _emscripten_resize_heap, "fd_close": _fd_close, "fd_seek": _fd_seek, "fd_write": _fd_write, "memory": wasmMemory, "setTempRet0": _setTempRet0, "table": wasmTable };
+var asm = createWasm();
 Module["asm"] = asm;
-var _emscripten_get_sbrk_ptr = Module["_emscripten_get_sbrk_ptr"] = function() {
-  return Module["asm"]["_emscripten_get_sbrk_ptr"].apply(null, arguments)
+/** @type {function(...*):?} */
+var ___wasm_call_ctors = Module["___wasm_call_ctors"] = function() {
+  return (___wasm_call_ctors = Module["___wasm_call_ctors"] = Module["asm"]["__wasm_call_ctors"]).apply(null, arguments);
 };
 
-var _free = Module["_free"] = function() {
-  return Module["asm"]["_free"].apply(null, arguments)
-};
-
-var _malloc = Module["_malloc"] = function() {
-  return Module["asm"]["_malloc"].apply(null, arguments)
-};
-
-var _memcpy = Module["_memcpy"] = function() {
-  return Module["asm"]["_memcpy"].apply(null, arguments)
-};
-
-var _memmove = Module["_memmove"] = function() {
-  return Module["asm"]["_memmove"].apply(null, arguments)
-};
-
-var _memset = Module["_memset"] = function() {
-  return Module["asm"]["_memset"].apply(null, arguments)
-};
-
-var _opus_encode_float = Module["_opus_encode_float"] = function() {
-  return Module["asm"]["_opus_encode_float"].apply(null, arguments)
-};
-
+/** @type {function(...*):?} */
 var _opus_encoder_create = Module["_opus_encoder_create"] = function() {
-  return Module["asm"]["_opus_encoder_create"].apply(null, arguments)
+  return (_opus_encoder_create = Module["_opus_encoder_create"] = Module["asm"]["opus_encoder_create"]).apply(null, arguments);
 };
 
+/** @type {function(...*):?} */
+var _opus_encode_float = Module["_opus_encode_float"] = function() {
+  return (_opus_encode_float = Module["_opus_encode_float"] = Module["asm"]["opus_encode_float"]).apply(null, arguments);
+};
+
+/** @type {function(...*):?} */
 var _opus_encoder_ctl = Module["_opus_encoder_ctl"] = function() {
-  return Module["asm"]["_opus_encoder_ctl"].apply(null, arguments)
+  return (_opus_encoder_ctl = Module["_opus_encoder_ctl"] = Module["asm"]["opus_encoder_ctl"]).apply(null, arguments);
 };
 
+/** @type {function(...*):?} */
 var _opus_encoder_destroy = Module["_opus_encoder_destroy"] = function() {
-  return Module["asm"]["_opus_encoder_destroy"].apply(null, arguments)
+  return (_opus_encoder_destroy = Module["_opus_encoder_destroy"] = Module["asm"]["opus_encoder_destroy"]).apply(null, arguments);
 };
 
-var _rintf = Module["_rintf"] = function() {
-  return Module["asm"]["_rintf"].apply(null, arguments)
-};
-
-var _speex_resampler_destroy = Module["_speex_resampler_destroy"] = function() {
-  return Module["asm"]["_speex_resampler_destroy"].apply(null, arguments)
-};
-
+/** @type {function(...*):?} */
 var _speex_resampler_init = Module["_speex_resampler_init"] = function() {
-  return Module["asm"]["_speex_resampler_init"].apply(null, arguments)
+  return (_speex_resampler_init = Module["_speex_resampler_init"] = Module["asm"]["speex_resampler_init"]).apply(null, arguments);
 };
 
+/** @type {function(...*):?} */
+var _speex_resampler_destroy = Module["_speex_resampler_destroy"] = function() {
+  return (_speex_resampler_destroy = Module["_speex_resampler_destroy"] = Module["asm"]["speex_resampler_destroy"]).apply(null, arguments);
+};
+
+/** @type {function(...*):?} */
 var _speex_resampler_process_interleaved_float = Module["_speex_resampler_process_interleaved_float"] = function() {
-  return Module["asm"]["_speex_resampler_process_interleaved_float"].apply(null, arguments)
+  return (_speex_resampler_process_interleaved_float = Module["_speex_resampler_process_interleaved_float"] = Module["asm"]["speex_resampler_process_interleaved_float"]).apply(null, arguments);
 };
 
-var establishStackSpace = Module["establishStackSpace"] = function() {
-  return Module["asm"]["establishStackSpace"].apply(null, arguments)
+/** @type {function(...*):?} */
+var ___errno_location = Module["___errno_location"] = function() {
+  return (___errno_location = Module["___errno_location"] = Module["asm"]["__errno_location"]).apply(null, arguments);
 };
 
-var stackAlloc = Module["stackAlloc"] = function() {
-  return Module["asm"]["stackAlloc"].apply(null, arguments)
+/** @type {function(...*):?} */
+var _malloc = Module["_malloc"] = function() {
+  return (_malloc = Module["_malloc"] = Module["asm"]["malloc"]).apply(null, arguments);
 };
 
-var stackRestore = Module["stackRestore"] = function() {
-  return Module["asm"]["stackRestore"].apply(null, arguments)
+/** @type {function(...*):?} */
+var _free = Module["_free"] = function() {
+  return (_free = Module["_free"] = Module["asm"]["free"]).apply(null, arguments);
 };
 
+/** @type {function(...*):?} */
 var stackSave = Module["stackSave"] = function() {
-  return Module["asm"]["stackSave"].apply(null, arguments)
+  return (stackSave = Module["stackSave"] = Module["asm"]["stackSave"]).apply(null, arguments);
 };
 
+/** @type {function(...*):?} */
+var stackAlloc = Module["stackAlloc"] = function() {
+  return (stackAlloc = Module["stackAlloc"] = Module["asm"]["stackAlloc"]).apply(null, arguments);
+};
+
+/** @type {function(...*):?} */
+var stackRestore = Module["stackRestore"] = function() {
+  return (stackRestore = Module["stackRestore"] = Module["asm"]["stackRestore"]).apply(null, arguments);
+};
+
+/** @type {function(...*):?} */
+var __growWasmMemory = Module["__growWasmMemory"] = function() {
+  return (__growWasmMemory = Module["__growWasmMemory"] = Module["asm"]["__growWasmMemory"]).apply(null, arguments);
+};
+
+/** @type {function(...*):?} */
 var dynCall_ii = Module["dynCall_ii"] = function() {
-  return Module["asm"]["dynCall_ii"].apply(null, arguments)
+  return (dynCall_ii = Module["dynCall_ii"] = Module["asm"]["dynCall_ii"]).apply(null, arguments);
 };
 
+/** @type {function(...*):?} */
 var dynCall_iiii = Module["dynCall_iiii"] = function() {
-  return Module["asm"]["dynCall_iiii"].apply(null, arguments)
+  return (dynCall_iiii = Module["dynCall_iiii"] = Module["asm"]["dynCall_iiii"]).apply(null, arguments);
 };
 
-var dynCall_iiiiiii = Module["dynCall_iiiiiii"] = function() {
-  return Module["asm"]["dynCall_iiiiiii"].apply(null, arguments)
-};
-
+/** @type {function(...*):?} */
 var dynCall_jiji = Module["dynCall_jiji"] = function() {
-  return Module["asm"]["dynCall_jiji"].apply(null, arguments)
+  return (dynCall_jiji = Module["dynCall_jiji"] = Module["asm"]["dynCall_jiji"]).apply(null, arguments);
 };
 
+/** @type {function(...*):?} */
 var dynCall_viiiiiii = Module["dynCall_viiiiiii"] = function() {
-  return Module["asm"]["dynCall_viiiiiii"].apply(null, arguments)
+  return (dynCall_viiiiiii = Module["dynCall_viiiiiii"] = Module["asm"]["dynCall_viiiiiii"]).apply(null, arguments);
 };
-;
+
+/** @type {function(...*):?} */
+var dynCall_iiiiiii = Module["dynCall_iiiiiii"] = function() {
+  return (dynCall_iiiiiii = Module["dynCall_iiiiiii"] = Module["asm"]["dynCall_iiiiiii"]).apply(null, arguments);
+};
 
 
+
+/**
+ * @license
+ * Copyright 2010 The Emscripten Authors
+ * SPDX-License-Identifier: MIT
+ */
 
 // === Auto-generated postamble setup entry stuff ===
 
 Module['asm'] = asm;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -2238,6 +2371,7 @@ function ExitStatus(status) {
 
 var calledMain = false;
 
+
 dependenciesFulfilled = function runCaller() {
   // If run has never been called, and we should call run (INVOKE_RUN is true, and Module.noInitialRun is not false)
   if (!calledRun) run();
@@ -2266,6 +2400,7 @@ function run(args) {
     // or while the async setStatus time below was happening
     if (calledRun) return;
     calledRun = true;
+    Module['calledRun'] = true;
 
     if (ABORT) return;
 
@@ -2295,6 +2430,7 @@ function run(args) {
 Module['run'] = run;
 
 
+/** @param {boolean|number=} implicit */
 function exit(status, implicit) {
 
   // if this is just main exit-ing implicitly, and the status is 0, then we
