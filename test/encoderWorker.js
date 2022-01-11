@@ -31,6 +31,7 @@ describe('encoderWorker', function() {
       _opus_encode_float_spy = sinon.spy(Module, '_opus_encode_float');
       _malloc_spy = sinon.spy(Module, '_malloc');
       _free_spy = sinon.spy(Module, '_free');
+      config = Object.assign({streamOpusPackets: false}, config);
       const encoder = new Module.OggOpusEncoder(config, Module);
       encoder.generateIdPage();
       encoder.generateCommentPage();
