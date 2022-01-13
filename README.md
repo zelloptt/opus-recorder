@@ -213,9 +213,19 @@ Windows: Install autotools using [MSYS2](http://www.msys2.org/)
 pacman -S make autoconf automake libtool pkgconfig
 ```
 
-[Install Node.js](https://nodejs.org/en/download/)
+[Install Node.js 16 LTS](https://nodejs.org/dist/v16.13.2/node-v16.13.2.pkg)
+
+Note: Node 17 does not support the required openssl functionality.
 
 [Install EMScripten](https://kripken.github.io/emscripten-site/docs/getting_started/downloads.html) v1.38.48
+```bash
+git clone https://github.com/emscripten-core/emsdk.git
+cd emsdk
+git checkout tags/1.38.48
+./emsdk install sdk-1.38.48-64bit
+./emsdk activate sdk-1.38.48-64bit
+source emsdk_env.sh
+```
 
 Install npm dependencies:
 ```bash
