@@ -208,12 +208,18 @@ Mac: Install autotools using [MacPorts](https://www.macports.org/install.php)
 port install automake autoconf libtool pkgconfig
 ```
 
-Windows: Install autotools using [MSYS2](http://www.msys2.org/)
+Windows: The [MSYS2](http://www.msys2.org/) does not support Node.js anymore. We have to find another way to build it using the Windows platform.
+
+The old (obsolete) instructions:
+
+Install autotools using [MSYS2](http://www.msys2.org/)
 ```bash
 pacman -S make autoconf automake libtool pkgconfig
 ```
 
 [Install Node.js 16 LTS](https://nodejs.org/dist/v16.13.2/node-v16.13.2.pkg)
+
+Use [nvm](https://github.com/nvm-sh/nvm#install--update-script) in order to quickly install and switch between the different Node.js versions.
 
 Note: Node 17 does not support the required openssl functionality.
 
