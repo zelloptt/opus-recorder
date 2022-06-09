@@ -1,11 +1,10 @@
 var chai = require('chai');
 var sinon = require('sinon');
 var sinonChai = require("sinon-chai");
-var requireUncached = require('require-uncached');
+var importFresh = require('import-fresh');
 var Promise = require('promise');
 
 chai.use(sinonChai);
-var should = chai.should();
 var expect = chai.expect;
 
 
@@ -29,7 +28,7 @@ describe('Recorder', function(){
   var Recorder;
 
   var requireRecorder = function(){
-    Recorder = requireUncached('../dist/recorder.min');
+    Recorder = importFresh('../dist/recorder.min');
     sinon.spy(Recorder.prototype, 'ondataavailable');
     sinon.spy(Recorder.prototype, 'onstart');
     sinon.spy(Recorder.prototype, 'onstop');

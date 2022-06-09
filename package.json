@@ -45,7 +45,7 @@
     "mocha": "^10.0.0",
     "promise": "^8.1.0",
     "raw-loader": "^4.0.2",
-    "require-uncached": "^2.0.0",
+    "import-fresh": "^3.3.0",
     "sinon": "^14.0.0",
     "sinon-chai": "^3.7.0",
     "webpack": "^5.73.0",
