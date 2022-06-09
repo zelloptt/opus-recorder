@@ -35,7 +35,7 @@ recorder:
 	npm run webpack -- --output-library Recorder --output-library-target umd --optimize-minimize  $(RECORDER_SRC) $(RECORDER_MIN)
 
 clean:
-	rm -rf $(OUTPUT_DIR) $(OUTPUT_DIR_UNMINIFIED)
+	rm -rf $(OUTPUT_DIR) $(OUTPUT_DIR_UNMINIFIED) $(LIBOPUS_DIR) $(LIBSPEEXDSP_DIR)
 	mkdir $(OUTPUT_DIR)
 	mkdir $(OUTPUT_DIR_UNMINIFIED)
 
