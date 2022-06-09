@@ -35,7 +35,7 @@ recorder:
 	npm run webpack -- --output-library Recorder --output-library-target umd --optimize-minimize  $(RECORDER_SRC) $(RECORDER_MIN)
 
 clean:
-	rm -rf $(OUTPUT_DIR) $(OUTPUT_DIR_UNMINIFIED) $(LIBOPUS_DIR) $(LIBSPEEXDSP_DIR)
+	rm -rf $(OUTPUT_DIR) $(OUTPUT_DIR_UNMINIFIED)
 	mkdir $(OUTPUT_DIR)
 	mkdir $(OUTPUT_DIR_UNMINIFIED)
 
@@ -62,29 +62,29 @@ $(LIBSPEEXDSP_OBJ): $(LIBSPEEXDSP_DIR)/autogen.sh
 	cd $(LIBSPEEXDSP_DIR); emmake make
 
 $(LIBOPUS_ENCODER): $(LIBOPUS_ENCODER_SRC) $(LIBOPUS_OBJ) $(LIBSPEEXDSP_OBJ)
-	npm run webpack -- --config webpack.config.js -d --output-library EncoderWorker $(LIBOPUS_ENCODER_SRC) -o $@
+	npm run webpack -- --config webpack.config.js --mode=development --output-library EncoderWorker --entry $(LIBOPUS_ENCODER_SRC) -o $(@D) --output-filename $(@F)
 	emcc -o $@ $(EMCC_OPTS) -g3 -s EXPORTED_FUNCTIONS="[$(DEFAULT_EXPORTS),$(LIBOPUS_ENCODER_EXPORTS),$(LIBSPEEXDSP_EXPORTS)]" --pre-js $@ $(LIBOPUS_OBJ) $(LIBSPEEXDSP_OBJ)
 
 $(LIBOPUS_ENCODER_MIN): $(LIBOPUS_ENCODER_SRC) $(LIBOPUS_OBJ) $(LIBSPEEXDSP_OBJ)
-	npm run webpack -- --config webpack.config.js -p --output-library EncoderWorker $(LIBOPUS_ENCODER_SRC) -o $@
+	npm run webpack -- --config webpack.config.js --mode=production --output-library EncoderWorker --entry $(LIBOPUS_ENCODER_SRC) -o $(@D) --output-filename $(@F)
 	emcc -o $@ $(EMCC_OPTS) -s EXPORTED_FUNCTIONS="[$(DEFAULT_EXPORTS),$(LIBOPUS_ENCODER_EXPORTS),$(LIBSPEEXDSP_EXPORTS)]" --pre-js $@ $(LIBOPUS_OBJ) $(LIBSPEEXDSP_OBJ)
 
 $(LIBOPUS_DECODER): $(LIBOPUS_DECODER_SRC) $(LIBOPUS_OBJ) $(LIBSPEEXDSP_OBJ)
-	npm run webpack -- --config webpack.config.js -d --output-library DecoderWorker $(LIBOPUS_DECODER_SRC) -o $@
+	npm run webpack -- --config webpack.config.js --mode=development --output-library DecoderWorker --entry $(LIBOPUS_DECODER_SRC) -o $(@D) --output-filename $(@F)
 	emcc -o $@ $(EMCC_OPTS) -g3 -s EXPORTED_FUNCTIONS="[$(DEFAULT_EXPORTS),$(LIBOPUS_DECODER_EXPORTS),$(LIBSPEEXDSP_EXPORTS)]" --pre-js $@ $(LIBOPUS_OBJ) $(LIBSPEEXDSP_OBJ)
 
 $(LIBOPUS_DECODER_MIN): $(LIBOPUS_DECODER_SRC) $(LIBOPUS_OBJ) $(LIBSPEEXDSP_OBJ)
-	npm run webpack -- --config webpack.config.js -p --output-library DecoderWorker $(LIBOPUS_DECODER_SRC) -o $@
+	npm run webpack -- --config webpack.config.js --mode=production --output-library DecoderWorker --entry $(LIBOPUS_DECODER_SRC) -o $(@D) --output-filename $(@F)
 	emcc -o $@ $(EMCC_OPTS) -s EXPORTED_FUNCTIONS="[$(DEFAULT_EXPORTS),$(LIBOPUS_DECODER_EXPORTS),$(LIBSPEEXDSP_EXPORTS)]" --pre-js $@ $(LIBOPUS_OBJ) $(LIBSPEEXDSP_OBJ)
 
 $(RECORDER): $(RECORDER_SRC)
-	npm run webpack -- --config webpack.config.js -d --output-library Recorder $(RECORDER_SRC) -o $@
+	npm run webpack -- --config webpack.config.js --mode=development --output-library Recorder --entry $(RECORDER_SRC) -o $(@D) --output-filename $(@F)
 
 $(RECORDER_MIN): $(RECORDER_SRC)
-	npm run webpack -- --config webpack.config.js -p --output-library Recorder $(RECORDER_SRC) -o $@
+	npm run webpack -- --config webpack.config.js --mode=production --output-library Recorder --entry $(RECORDER_SRC) -o $(@D) --output-filename $(@F)
 
 $(WAVE_WORKER): $(WAVE_WORKER_SRC)
-	npm run webpack -- --config webpack.config.js -d --output-library WaveWorker $(WAVE_WORKER_SRC) -o $@
+	npm run webpack -- --config webpack.config.js --mode=development --output-library WaveWorker --entry $(WAVE_WORKER_SRC) -o $(@D) --output-filename $(@F)
 
 $(WAVE_WORKER_MIN): $(WAVE_WORKER_SRC)
-	npm run webpack -- --config webpack.config.js -p --output-library WaveWorker $(WAVE_WORKER_SRC) -o $@
+	npm run webpack -- --config webpack.config.js --mode=production --output-library WaveWorker --entry $(WAVE_WORKER_SRC) -o $(@D) --output-filename $(@F)
