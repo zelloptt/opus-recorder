@@ -201,7 +201,7 @@ Unsupported:
 ---------
 ### Building from sources
 
-Prebuilt sources are included in the dist folder. However below are instructions if you want to build them yourself. Opus and speex are compiled without SIMD optimizations. Performace is significantly worse with SIMD optimizations enabled.
+Prebuilt sources are included in the dist folder. However, below are instructions if you want to build them yourself. Opus and speex are compiled without SIMD optimizations. Performance is significantly worse with SIMD optimizations enabled.
 
 Mac: Install autotools using [MacPorts](https://www.macports.org/install.php)
 ```bash
