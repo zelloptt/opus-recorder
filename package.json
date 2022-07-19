@@ -43,7 +43,7 @@
   "devDependencies": {
     "chai": "4.3.6",
     "import-fresh": "3.3.0",
-    "mocha": "^6.2.3",
+    "mocha": "6.2.3",
     "promise": "8.1.0",
     "raw-loader": "4.0.2",
     "sinon": "14.0.0",
