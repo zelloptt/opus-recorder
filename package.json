@@ -36,16 +36,20 @@
     "test": "make test",
     "webpack": "webpack"
   },
+  "engines": {
+    "node": "16.15.1",
+    "npm": "8.11.0"
+  },
   "devDependencies": {
-    "chai": "^4.2.0",
-    "mocha": "^7.1.2",
-    "promise": "^8.1.0",
-    "raw-loader": "^4.0.1",
-    "require-uncached": "^2.0.0",
-    "sinon": "^9.0.2",
-    "sinon-chai": "^3.5.0",
-    "webpack": "^4.43.0",
-    "webpack-cli": "^3.3.11"
+    "chai": "4.3.6",
+    "mocha": "10.0.0",
+    "promise": "8.1.0",
+    "raw-loader": "4.0.2",
+    "import-fresh": "3.3.0",
+    "sinon": "14.0.0",
+    "sinon-chai": "3.7.0",
+    "webpack": "5.73.0",
+    "webpack-cli": "4.10.0"
   },
   "dependencies": {}
 }

@@ -201,21 +201,37 @@ Unsupported:
 ---------
 ### Building from sources
 
-Prebuilt sources are included in the dist folder. However below are instructions if you want to build them yourself. Opus and speex are compiled without SIMD optimizations. Performace is significantly worse with SIMD optimizations enabled.
+Prebuilt sources are included in the dist folder. However, below are instructions if you want to build them yourself. Opus and speex are compiled without SIMD optimizations. Performance is significantly worse with SIMD optimizations enabled.
 
 Mac: Install autotools using [MacPorts](https://www.macports.org/install.php)
 ```bash
 port install automake autoconf libtool pkgconfig
 ```
 
-Windows: Install autotools using [MSYS2](http://www.msys2.org/)
+Windows: The [MSYS2](http://www.msys2.org/) does not support Node.js anymore. We have to find another way to build it using the Windows platform.
+
+The old (obsolete) instructions:
+
+Install autotools using [MSYS2](http://www.msys2.org/)
 ```bash
 pacman -S make autoconf automake libtool pkgconfig
 ```
 
-[Install Node.js](https://nodejs.org/en/download/)
+[Install Node.js 16 LTS](https://nodejs.org/dist/v16.15.1/node-v16.15.1.pkg)
+
+Use [nvm](https://github.com/nvm-sh/nvm#install--update-script) in order to quickly install and switch between the different Node.js versions.
+
+Note: Node 17 does not support the required openssl functionality.
 
 [Install EMScripten](https://kripken.github.io/emscripten-site/docs/getting_started/downloads.html) v1.38.48
+```bash
+git clone https://github.com/emscripten-core/emsdk.git
+cd emsdk
+git checkout tags/1.38.48
+./emsdk install sdk-1.38.48-64bit
+./emsdk activate sdk-1.38.48-64bit
+source emsdk_env.sh
+```
 
 Install npm dependencies:
 ```bash

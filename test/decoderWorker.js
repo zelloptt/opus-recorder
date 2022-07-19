@@ -1,11 +1,9 @@
 var chai = require('chai');
 var sinon = require('sinon');
 var sinonChai = require("sinon-chai");
-var requireUncached = require('require-uncached');
 var fs = require('fs');
 
 chai.use(sinonChai);
-var should = chai.should();
 var expect = chai.expect;
 
 
