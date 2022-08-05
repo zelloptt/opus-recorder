@@ -223,13 +223,13 @@ Use [nvm](https://github.com/nvm-sh/nvm#install--update-script) in order to quic
 
 Note: Node 17 does not support the required openssl functionality.
 
-[Install EMScripten](https://kripken.github.io/emscripten-site/docs/getting_started/downloads.html) v1.38.48
+[Install EMScripten](https://kripken.github.io/emscripten-site/docs/getting_started/downloads.html) v3.1.18
 ```bash
 git clone https://github.com/emscripten-core/emsdk.git
 cd emsdk
-git checkout tags/1.38.48
-./emsdk install sdk-1.38.48-64bit
-./emsdk activate sdk-1.38.48-64bit
+git checkout 3.1.18
+./emsdk install 3.1.18
+./emsdk activate 3.1.18
 source emsdk_env.sh
 ```
 
