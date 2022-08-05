@@ -12,8 +12,14 @@ open(BASE64, $base64FilePath) or die "Error: no file found.";
 open(SOURCE, $encoderFilePath);
 open(RESULT, ">$inlineEncoderFilePath");
 while (<SOURCE>) {
-    if (/var wasmBinaryFile = 'encoderWorker.wasm';/) {
-        printf RESULT ("var wasmBinaryFile = dataURIPrefix + '%s';\n", $base64);
+    if (index($_, "encoderWorker.wasm") != -1) {
+        if (index($_, "var wasmBinaryFile = ") != -1) {
+            printf RESULT ("var wasmBinaryFile = dataURIPrefix + '%s';\n", $base64);
+        } elsif (index($_, "wasmBinaryFile = ") != -1) {
+            printf RESULT ("wasmBinaryFile = dataURIPrefix + '%s';\n", $base64);
+        } else {
+            die "No pattern found! Check the content of " . $encoderFilePath . "!"
+        }
     } else {
         print RESULT $_;
     }
