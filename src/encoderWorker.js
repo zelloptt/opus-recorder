@@ -46,6 +46,7 @@ global['onmessage'] = function( e ){
       case 'destroy':
         if (encoder) {
           encoder.destroy();
+          encoder = null;
         }
         break;
 
