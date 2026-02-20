@@ -29,6 +29,10 @@ global['onmessage'] = function( e ){
         break;
 
       case 'close':
+        if (encoder) {
+          encoder.destroy();
+          encoder = null;
+        }
         global['postMessage']( {message: 'close'} );
         global['close']();
         break;
@@ -42,6 +46,7 @@ global['onmessage'] = function( e ){
       case 'destroy':
         if (encoder) {
           encoder.destroy();
+          encoder = null;
         }
         break;
 
@@ -330,8 +335,10 @@ OggOpusEncoder.prototype.interleave = function( buffers ) {
 OggOpusEncoder.prototype.segmentPacket = function( packetLength ) {
   if ( this.config.streamOpusPackets ) {
     if ( packetLength > 0 ) {
-      var packet = new Uint8Array( HEAPU8.subarray(this.encoderOutputPointer, this.encoderOutputPointer + packetLength) );
-      global['postMessage']({ type: 'opus', data: packet });
+      var packet = new Uint8Array( this.HEAPU8.subarray(this.encoderOutputPointer, this.encoderOutputPointer + packetLength) );
+      // Passing the buffer with the transfer list prevents the browser
+      // from copying the bytes. Same physical memory, but now owned by the main thread
+      global['postMessage']({ type: 'opus', data: packet }, [packet.buffer]);
     }
     return;
   }
