@@ -335,6 +335,8 @@ OggOpusEncoder.prototype.segmentPacket = function( packetLength ) {
   if ( this.config.streamOpusPackets ) {
     if ( packetLength > 0 ) {
       var packet = new Uint8Array( this.HEAPU8.subarray(this.encoderOutputPointer, this.encoderOutputPointer + packetLength) );
+      // Passing the buffer with the transfer list prevents the browser
+      // from copying the bytes. Same physical memory, but now owned by the main thread
       global['postMessage']({ type: 'opus', data: packet }, [packet.buffer]);
     }
     return;
