@@ -259,6 +259,7 @@ Recorder.prototype.destroyWorker = function(){
   if ( this.state === "inactive" ) {
     if ( this.encoder ) {
       this.encoder.postMessage({ command: "close" });
+      this.encoder.terminate();
       delete this.encoder;
     }
   }

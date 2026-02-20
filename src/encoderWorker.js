@@ -29,6 +29,10 @@ global['onmessage'] = function( e ){
         break;
 
       case 'close':
+        if (encoder) {
+          encoder.destroy();
+          encoder = null;
+        }
         global['postMessage']( {message: 'close'} );
         global['close']();
         break;
@@ -330,8 +334,8 @@ OggOpusEncoder.prototype.interleave = function( buffers ) {
 OggOpusEncoder.prototype.segmentPacket = function( packetLength ) {
   if ( this.config.streamOpusPackets ) {
     if ( packetLength > 0 ) {
-      var packet = new Uint8Array( HEAPU8.subarray(this.encoderOutputPointer, this.encoderOutputPointer + packetLength) );
-      global['postMessage']({ type: 'opus', data: packet });
+      var packet = new Uint8Array( this.HEAPU8.subarray(this.encoderOutputPointer, this.encoderOutputPointer + packetLength) );
+      global['postMessage']({ type: 'opus', data: packet }, [packet.buffer]);
     }
     return;
   }

@@ -17,8 +17,25 @@ global['onmessage'] = function( e ){
       case 'done':
         if (decoder) {
           decoder.sendLastBuffer();
-          global['close']();
+          decoder.destroy();
+          decoder = null;
         }
+        global['close']();
+        break;
+
+      case 'destroy':
+        if (decoder) {
+          decoder.destroy();
+        }
+        break;
+
+      case 'close':
+        if (decoder) {
+          decoder.destroy();
+          decoder = null;
+        }
+        global['postMessage']( {message: 'close'} );
+        global['close']();
         break;
 
       case 'init':
@@ -158,6 +175,23 @@ OggOpusDecoder.prototype.initResampler = function() {
   this.resampleOutputLengthPointer = this._malloc( 4 );
   this.resampleOutputMaxLength = Math.ceil( this.decoderOutputMaxLength * this.config.outputBufferSampleRate / this.config.decoderSampleRate );
   this.resampleOutputBufferPointer = this._malloc( this.resampleOutputMaxLength * 4 ); // 4 bytes per sample
+};
+
+OggOpusDecoder.prototype.destroy = function() {
+  if ( this.decoder ) {
+    this._opus_decoder_destroy( this.decoder );
+    this._free( this.decoderBufferPointer );
+    this._free( this.decoderOutputLengthPointer );
+    this._free( this.decoderOutputPointer );
+    this.decoder = null;
+  }
+
+  if ( this.resampler ) {
+    this._speex_resampler_destroy( this.resampler );
+    this._free( this.resampleOutputLengthPointer );
+    this._free( this.resampleOutputBufferPointer );
+    this.resampler = null;
+  }
 };
 
 OggOpusDecoder.prototype.resetOutputBuffers = function(){
