@@ -344,6 +344,11 @@ OggOpusEncoder.prototype.interleave = function( buffers ) {
     }
   }
 
+  // Same-size buffers are the steady state once the scratch space has grown
+  // to fit, so hand back the buffer itself rather than a fresh view each call.
+  if ( needed === this.interleavedBuffers.length ) {
+    return this.interleavedBuffers;
+  }
   return this.interleavedBuffers.subarray( 0, needed );
 };
 

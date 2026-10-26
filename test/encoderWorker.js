@@ -470,4 +470,18 @@ describe('encoderWorker final frame and input buffers', function() {
       encoder.destroy();
     });
   });
+
+  it('returns the scratch buffer itself once same-size stereo buffers fit it exactly', function() {
+    return streamingEncoder({ numberOfChannels: 2, bufferLength: 128 }).then(function(encoder) {
+      var left = new Float32Array(128), right = new Float32Array(128);
+      // exact fit: no view allocated, the scratch buffer comes back as-is
+      expect(encoder.interleave([left, right])).to.equal(encoder.interleavedBuffers);
+      // smaller input: a view over the prefix, not the whole buffer
+      var view = encoder.interleave([new Float32Array(32), new Float32Array(32)]);
+      expect(view).to.not.equal(encoder.interleavedBuffers);
+      expect(view.length).to.equal(64);
+      expect(view.buffer).to.equal(encoder.interleavedBuffers.buffer);
+      encoder.destroy();
+    });
+  });
 });
