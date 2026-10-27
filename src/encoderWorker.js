@@ -178,15 +178,22 @@ OggOpusEncoder.prototype.flush = function() {
 
 OggOpusEncoder.prototype.encodeFinalFrame = function() {
   if ( this.resampleBufferIndex > 0 ) {
-    // Complete the pending frame with silence and nothing more. The padding
-    // is measured against the resample buffer, not config.bufferLength: a
-    // caller feeding buffers shorter than a frame would otherwise get a
-    // negative length here, and a caller feeding the default 4096 got up to
-    // three extra frames of silence.
-    var missingPerChannel = ( this.resampleBufferLength - this.resampleBufferIndex ) / this.config.numberOfChannels;
+    var perChannel;
+    if ( this.config.streamOpusPackets ) {
+      // Raw packet streaming: complete the pending frame with silence and
+      // nothing more. Measured against the resample buffer, not
+      // config.bufferLength, so a caller feeding buffers shorter than a
+      // frame (an AudioWorklet's 128-sample quantum) does not get a negative
+      // length here.
+      perChannel = ( this.resampleBufferLength - this.resampleBufferIndex ) / this.config.numberOfChannels;
+    } else {
+      // Ogg output keeps its historical tail: the extra silence covers the
+      // decoder's pre-skip and the end granule the header advertises.
+      perChannel = this.config.bufferLength - ( this.resampleBufferIndex / this.config.numberOfChannels );
+    }
     var finalFrameBuffers = [];
     for ( var i = 0; i < this.config.numberOfChannels; ++i ) {
-      finalFrameBuffers.push( new Float32Array( missingPerChannel ) );
+      finalFrameBuffers.push( new Float32Array( Math.max( 0, perChannel ) ) );
     }
     this.encode( finalFrameBuffers );
   }

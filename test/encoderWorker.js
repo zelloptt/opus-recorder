@@ -456,6 +456,17 @@ describe('encoderWorker final frame and input buffers', function() {
     });
   });
 
+  it('keeps the Ogg tail when writing pages, so pre-skip and end granule are unchanged', function() {
+    return streamingEncoder({ streamOpusPackets: false, maxFramesPerPage: 40, bufferLength: 4096 }).then(function(encoder) {
+      var encode = sinon.spy(encoder, 'encode');
+      encoder.encode([new Float32Array(100)]);
+      encoder.encodeFinalFrame();
+      // the historical bufferLength-based padding, not just the frame remainder
+      expect(encode.lastCall.args[0][0].length).to.equal(4096 - 100);
+      encoder.destroy();
+    });
+  });
+
   it('interleaves stereo buffers of any length', function() {
     return streamingEncoder({ numberOfChannels: 2 }).then(function(encoder) {
       // 128-sample render quanta: 3 of them make 384 samples per channel, one 320-sample frame
