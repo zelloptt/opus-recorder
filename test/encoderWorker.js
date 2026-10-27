@@ -388,3 +388,111 @@ describe('encoderWorker', function() {
     });
   });
 });
+
+// The unminified build carries the current worker source; dist/encoderWorker.min.js
+// needs an emscripten rebuild (`make`) to pick these changes up.
+describe('encoderWorker final frame and input buffers', function() {
+
+  var Module = require('../dist-unminified/encoderWorker');
+
+  function streamingEncoder(config) {
+    return Module.mainReady.then(function() {
+      return new Module.OggOpusEncoder(Object.assign({
+        streamOpusPackets: true,
+        encoderFrameSize: 20,
+        encoderSampleRate: 16000,
+        originalSampleRate: 16000,
+        bufferLength: 128
+      }, config), Module);
+    });
+  }
+
+  var packets;
+
+  beforeEach(function() {
+    packets = 0;
+    global.postMessage = function(message) {
+      if (message && message.type === 'opus') packets++;
+    };
+    global.close = sinon.stub();
+  });
+
+  afterEach(function() {
+    sinon.restore();
+  });
+
+  it('accepts buffers shorter than bufferLength and completes the pending frame on done', function() {
+    return streamingEncoder().then(function(encoder) {
+      var encode = sinon.spy(encoder, 'encode');
+      // 3 x 128 = 384 samples: one 320-sample frame, 64 pending
+      for (var i = 0; i < 3; i++) encoder.encode([new Float32Array(128)]);
+      expect(packets).to.equal(1);
+      encoder.encodeFinalFrame();
+      expect(packets).to.equal(2);
+      // padded with exactly the 256 samples the frame was missing
+      var padding = encode.lastCall.args[0][0];
+      expect(padding.length).to.equal(256);
+      encoder.destroy();
+    });
+  });
+
+  it('adds no silent frame when the input ended on a frame boundary', function() {
+    return streamingEncoder().then(function(encoder) {
+      encoder.encode([new Float32Array(320)]);
+      expect(packets).to.equal(1);
+      encoder.encodeFinalFrame();
+      expect(packets).to.equal(1);
+      encoder.destroy();
+    });
+  });
+
+  it('pads to the frame, not to bufferLength, with the default buffer size', function() {
+    return streamingEncoder({ bufferLength: 4096 }).then(function(encoder) {
+      encoder.encode([new Float32Array(100)]);
+      encoder.encodeFinalFrame();
+      // one completed frame, not several frames of silence
+      expect(packets).to.equal(1);
+      encoder.destroy();
+    });
+  });
+
+  it('keeps the Ogg tail when writing pages, so pre-skip and end granule are unchanged', function() {
+    return streamingEncoder({ streamOpusPackets: false, maxFramesPerPage: 40, bufferLength: 4096 }).then(function(encoder) {
+      var encode = sinon.spy(encoder, 'encode');
+      encoder.encode([new Float32Array(100)]);
+      encoder.encodeFinalFrame();
+      // the historical bufferLength-based padding, not just the frame remainder
+      expect(encode.lastCall.args[0][0].length).to.equal(4096 - 100);
+      encoder.destroy();
+    });
+  });
+
+  it('interleaves stereo buffers of any length', function() {
+    return streamingEncoder({ numberOfChannels: 2 }).then(function(encoder) {
+      // 128-sample render quanta: 3 of them make 384 samples per channel, one 320-sample frame
+      for (var i = 0; i < 3; i++) encoder.encode([new Float32Array(128), new Float32Array(128)]);
+      expect(packets).to.equal(1);
+      // a buffer longer than bufferLength grows the scratch space instead of truncating
+      encoder.encode([new Float32Array(1024).fill(0.5), new Float32Array(1024).fill(-0.5)]);
+      expect(encoder.interleavedBuffers.length).to.be.at.least(2048);
+      expect(packets).to.equal(4);
+      encoder.encodeFinalFrame();
+      expect(packets).to.equal(5);
+      encoder.destroy();
+    });
+  });
+
+  it('returns the scratch buffer itself once same-size stereo buffers fit it exactly', function() {
+    return streamingEncoder({ numberOfChannels: 2, bufferLength: 128 }).then(function(encoder) {
+      var left = new Float32Array(128), right = new Float32Array(128);
+      // exact fit: no view allocated, the scratch buffer comes back as-is
+      expect(encoder.interleave([left, right])).to.equal(encoder.interleavedBuffers);
+      // smaller input: a view over the prefix, not the whole buffer
+      var view = encoder.interleave([new Float32Array(32), new Float32Array(32)]);
+      expect(view).to.not.equal(encoder.interleavedBuffers);
+      expect(view.length).to.equal(64);
+      expect(view.buffer).to.equal(encoder.interleavedBuffers.buffer);
+      encoder.destroy();
+    });
+  });
+});

@@ -115,6 +115,9 @@ var OggOpusEncoder = function( config, Module ){
     this.interleave = function( buffers ) { return buffers[0]; };
   }
   else {
+    // Sized for config.bufferLength up front and grown on demand: callers
+    // may hand over buffers of any length, such as the 128-sample render
+    // quantum an AudioWorklet produces.
     this.interleavedBuffers = new Float32Array( this.config.bufferLength * this.config.numberOfChannels );
   }
 
@@ -175,9 +178,22 @@ OggOpusEncoder.prototype.flush = function() {
 
 OggOpusEncoder.prototype.encodeFinalFrame = function() {
   if ( this.resampleBufferIndex > 0 ) {
+    var perChannel;
+    if ( this.config.streamOpusPackets ) {
+      // Raw packet streaming: complete the pending frame with silence and
+      // nothing more. Measured against the resample buffer, not
+      // config.bufferLength, so a caller feeding buffers shorter than a
+      // frame (an AudioWorklet's 128-sample quantum) does not get a negative
+      // length here.
+      perChannel = ( this.resampleBufferLength - this.resampleBufferIndex ) / this.config.numberOfChannels;
+    } else {
+      // Ogg output keeps its historical tail: the extra silence covers the
+      // decoder's pre-skip and the end granule the header advertises.
+      perChannel = this.config.bufferLength - ( this.resampleBufferIndex / this.config.numberOfChannels );
+    }
     var finalFrameBuffers = [];
     for ( var i = 0; i < this.config.numberOfChannels; ++i ) {
-      finalFrameBuffers.push( new Float32Array( this.config.bufferLength - (this.resampleBufferIndex / this.config.numberOfChannels) ));
+      finalFrameBuffers.push( new Float32Array( Math.max( 0, perChannel ) ) );
     }
     this.encode( finalFrameBuffers );
   }
@@ -323,13 +339,24 @@ OggOpusEncoder.prototype.initResampler = function() {
 };
 
 OggOpusEncoder.prototype.interleave = function( buffers ) {
-  for ( var i = 0; i < this.config.bufferLength; i++ ) {
-    for ( var channel = 0; channel < this.config.numberOfChannels; channel++ ) {
-      this.interleavedBuffers[ i * this.config.numberOfChannels + channel ] = buffers[ channel ][ i ];
+  var length = buffers[0].length;
+  var channels = this.config.numberOfChannels;
+  var needed = length * channels;
+  if ( this.interleavedBuffers.length < needed ) {
+    this.interleavedBuffers = new Float32Array( needed );
+  }
+  for ( var i = 0; i < length; i++ ) {
+    for ( var channel = 0; channel < channels; channel++ ) {
+      this.interleavedBuffers[ i * channels + channel ] = buffers[ channel ][ i ];
     }
   }
 
-  return this.interleavedBuffers;
+  // Same-size buffers are the steady state once the scratch space has grown
+  // to fit, so hand back the buffer itself rather than a fresh view each call.
+  if ( needed === this.interleavedBuffers.length ) {
+    return this.interleavedBuffers;
+  }
+  return this.interleavedBuffers.subarray( 0, needed );
 };
 
 OggOpusEncoder.prototype.segmentPacket = function( packetLength ) {
